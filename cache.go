@@ -192,6 +192,13 @@ func (c *Cache) GetGroupItemIDs(grpID string) (itmIDs []string) {
 	return
 }
 
+func (c *Cache) HasGroup(grpID string) (has bool) {
+	c.RLock()
+	_, has = c.groups[grpID]
+	c.RUnlock()
+	return
+}
+
 func (c *Cache) GetGroupItems(grpID string) (itms []interface{}) {
 	for _, itmID := range c.GetGroupItemIDs(grpID) {
 		itm, _ := c.Get(itmID)

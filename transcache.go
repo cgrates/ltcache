@@ -178,6 +178,13 @@ func (tc *TransCache) Remove(chID, itmID string, commit bool, transID string) {
 	}
 }
 
+func (tc *TransCache) HasGroup(chID, grpID string) (has bool) {
+	tc.cacheMux.RLock()
+	has = tc.cacheInstance(chID).HasGroup(grpID)
+	tc.cacheMux.RUnlock()
+	return
+}
+
 // GetGroupItems returns all items in a group. Nil if group does not exist
 func (tc *TransCache) GetGroupItemIDs(chID, grpID string) (itmIDs []string) {
 	tc.cacheMux.RLock()

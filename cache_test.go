@@ -161,6 +161,12 @@ func TestGetGroupItems(t *testing.T) {
 	if grpItms := cache.GetGroupItems("nonexsitent"); grpItms != nil {
 		t.Errorf("wrong group items: %+v", grpItms)
 	}
+	if has := cache.HasGroup("grp1"); !has {
+		t.Error("should have group")
+	}
+	if has := cache.HasGroup("nonexistent"); has {
+		t.Error("should not have group")
+	}
 }
 
 func TestSetGetRemLRU(t *testing.T) {
