@@ -242,6 +242,9 @@ func (tc *TransCache) GetCloned(chID, itmID string) (cln interface{}, err error)
 	if !hasIt {
 		return nil, ErrNotFound
 	}
+	if origVal == nil {
+		return
+	}
 	if _, canClone := origVal.(Cloner); !canClone {
 		return nil, ErrNotClonable
 	}

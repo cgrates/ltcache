@@ -246,6 +246,16 @@ func TestGetClone(t *testing.T) {
 	}
 }
 
+func TestGetClone2(t *testing.T) {
+	tc := NewTransCache(map[string]*CacheConfig{})
+	tc.Set("t11_", "mm", nil, nil, true, "")
+	if x, err := tc.GetCloned("t11_", "mm"); err != nil {
+		t.Error(err)
+	} else if x != nil {
+		t.Errorf("Expecting: nil, received: %+v", x)
+	}
+}
+
 //BenchmarkSet            	 3000000	       469 ns/op
 func BenchmarkSet(b *testing.B) {
 	cacheItems := [][]string{
