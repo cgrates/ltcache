@@ -6,6 +6,8 @@ Copyright (C) ITsysCOM GmbH. All Rights Reserved.
 package ltcache
 
 import (
+	"container/list"
+	"fmt"
 	"math/rand"
 	"reflect"
 	"sync"
@@ -253,6 +255,350 @@ func TestGetClone2(t *testing.T) {
 		t.Error(err)
 	} else if x != nil {
 		t.Errorf("Expecting: nil, received: %+v", x)
+	}
+}
+
+func TestTranscacheHasGroup(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {},
+		},
+	}
+	chID := "testChID"
+	grpID := "testGroupID"
+
+	exp := false
+	rcv := tc.HasGroup(chID, grpID)
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+
+	tc.cache[chID].groups = map[string]map[string]struct{}{
+		"testGroupID": make(map[string]struct{}),
+	}
+
+	exp = true
+	rcv = tc.HasGroup(chID, grpID)
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
+func TestTranscacheGetGroupItemIDs(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				groups: map[string]map[string]struct{}{
+					"testGroupID": {
+						"testField1": struct{}{},
+						"testField2": struct{}{},
+					},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	grpID := "testGroupID"
+
+	exp := []string{"testField1", "testField2"}
+	rcv := tc.GetGroupItemIDs(chID, grpID)
+
+	if len(exp) != len(rcv) {
+		t.Fatalf("\nexpected slice length: <%+v>, \nreceived slice length: <%+v>",
+			len(exp), len(rcv))
+	}
+
+	diff := make(map[string]int, len(exp))
+
+	for _, valRcv := range rcv {
+		diff[valRcv]++
+	}
+	for _, valExp := range exp {
+		if _, ok := diff[valExp]; !ok {
+			t.Fatalf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+		}
+		diff[valExp] -= 1
+		if diff[valExp] == 0 {
+			delete(diff, valExp)
+		}
+	}
+	if len(diff) != 0 {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
+func TestTranscacheClearSpecific(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID1": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache: map[string]*cachedItem{
+					"item1": {},
+					"item2": {},
+				},
+			},
+			"testChID2": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache: map[string]*cachedItem{
+					"item1": {},
+					"item2": {},
+					"item3": {},
+				},
+			},
+		},
+	}
+	chIDs := []string{"testChID2"}
+
+	exp := &TransCache{
+		cache: map[string]*Cache{
+			"testChID1": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache: map[string]*cachedItem{
+					"item1": {},
+					"item2": {},
+				},
+			},
+			"testChID2": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache:  map[string]*cachedItem{},
+			},
+		},
+	}
+
+	tc.Clear(chIDs)
+
+	for key, value := range tc.cache {
+		if len(value.cache) != len(exp.cache[key].cache) {
+			t.Errorf("\nKey: <%+v>\nexpected nr of items: <%+v>, \nreceived nr of items: <%+v>",
+				key, len(exp.cache[key].cache), len(value.cache))
+		}
+	}
+}
+
+func TestTranscacheClearAll(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID1": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache: map[string]*cachedItem{
+					"item1": {},
+					"item2": {},
+				},
+			},
+			"testChID2": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache: map[string]*cachedItem{
+					"item1": {},
+					"item2": {},
+					"item3": {},
+				},
+			},
+		},
+	}
+	var chIDs []string
+
+	exp := &TransCache{
+		cache: map[string]*Cache{
+			"testChID1": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache:  map[string]*cachedItem{},
+			},
+			"testChID2": {
+				lruIdx: list.New(),
+				ttlIdx: list.New(),
+				cache:  map[string]*cachedItem{},
+			},
+		},
+	}
+
+	tc.Clear(chIDs)
+
+	for key, value := range tc.cache {
+		if len(value.cache) != len(exp.cache[key].cache) {
+			t.Errorf("\nKey: <%+v>\nexpected nr of items: <%+v>, \nreceived nr of items: <%+v>",
+				key, len(exp.cache[key].cache), len(value.cache))
+		}
+	}
+}
+
+func TestTranscacheGetItemExpiryTime(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				cache: map[string]*cachedItem{
+					"testItemID": {
+						expiryTime: time.Time{},
+					},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	itmID := "testItemID"
+
+	var exp time.Time
+	expok := true
+	rcv, ok := tc.GetItemExpiryTime(chID, itmID)
+
+	if ok != expok {
+		t.Fatalf("\nexpected: <%+v>, \nreceived: <%+v>", expok, ok)
+	}
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
+func TestTranscacheHasItem(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				cache: map[string]*cachedItem{
+					"testItemID": {},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	itmID := "testItemID"
+
+	exp := true
+	rcv := tc.HasItem(chID, itmID)
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
+func TestTranscacheNoItem(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				cache: map[string]*cachedItem{
+					"otherItem": {},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	itmID := "testItemID"
+
+	exp := false
+	rcv := tc.HasItem(chID, itmID)
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
+func TestTranscacheGetClonedNotFound(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				cache: map[string]*cachedItem{
+					"otherItem": {},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	itmID := "testItemID"
+
+	experr := ErrNotFound
+	rcv, err := tc.GetCloned(chID, itmID)
+
+	if rcv != nil {
+		t.Fatalf("\nexpected nil, \nreceived: <%+v>", rcv)
+	}
+
+	if err == nil || err != experr {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", experr, err)
+	}
+}
+
+func TestTranscacheGetClonedNotClonable(t *testing.T) {
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				lruIdx: list.New(),
+				lruRefs: map[string]*list.Element{
+					"testItemID": {},
+				},
+				cache: map[string]*cachedItem{
+					"testItemID": {
+						value: 3,
+					},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	itmID := "testItemID"
+
+	experr := ErrNotClonable
+	rcv, err := tc.GetCloned(chID, itmID)
+
+	if rcv != nil {
+		t.Fatalf("\nexpected nil, \nreceived: <%+v>", rcv)
+	}
+
+	if err == nil || err != experr {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", experr, err)
+	}
+}
+
+type clonerMock struct {
+	testcase string
+}
+
+func (cM *clonerMock) Clone() (interface{}, error) {
+	switch cM.testcase {
+	case "clone error":
+		err := fmt.Errorf("clone mock error")
+		return nil, err
+	}
+	return nil, nil
+}
+func TestTranscacheGetClonedCloneError(t *testing.T) {
+	cloner := &clonerMock{
+		testcase: "clone error",
+	}
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			"testChID": {
+				lruIdx: list.New(),
+				lruRefs: map[string]*list.Element{
+					"testItemID": {},
+				},
+				cache: map[string]*cachedItem{
+					"testItemID": {
+						value: cloner,
+					},
+				},
+			},
+		},
+	}
+	chID := "testChID"
+	itmID := "testItemID"
+
+	experr := "clone mock error"
+	rcv, err := tc.GetCloned(chID, itmID)
+
+	if rcv != nil {
+		t.Fatalf("\nexpected nil, \nreceived: <%+v>", rcv)
+	}
+
+	if err == nil || err.Error() != experr {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", experr, err)
 	}
 }
 

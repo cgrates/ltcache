@@ -404,6 +404,46 @@ func TestCacheDisabled(t *testing.T) {
 	cache.Remove("4")
 }
 
+func TestCacheGroupLength(t *testing.T) {
+	c := &Cache{
+		groups: map[string]map[string]struct{}{
+			"testGroupID": {
+				"item1": {},
+				"item2": {},
+				"item3": {},
+			},
+		},
+	}
+	grpID := "testGroupID"
+
+	exp := 3
+	rcv := c.GroupLength(grpID)
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
+func TestCacheGetItemExpiryTime(t *testing.T) {
+	c := &Cache{
+		cache: map[string]*cachedItem{
+			"otherItemID": {},
+		},
+	}
+	itmID := "testItemID"
+
+	var exp time.Time
+	rcv, ok := c.GetItemExpiryTime(itmID)
+
+	if ok != false {
+		t.Fatalf("\nexpected: <%+v>, \nreceived: <%+v>", false, ok)
+	}
+
+	if rcv != exp {
+		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
+	}
+}
+
 // BenchmarkSetSimpleCache 	10000000	       228 ns/op
 func BenchmarkSetSimpleCache(b *testing.B) {
 	cache := NewCache(UnlimitedCaching, 0, false, nil)
