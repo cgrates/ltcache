@@ -245,7 +245,7 @@ func (tc *TransCache) GetCloned(chID, itmID string) (cln interface{}, err error)
 	if !canClone {
 		return nil, ErrNotClonable
 	}
-	return cloned.Clone(), nil
+	return cloned.Clone()
 }
 
 // GetItemIDs returns a list of item IDs matching prefix
