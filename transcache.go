@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
 	"sync"
 	"time"
 )
@@ -242,16 +241,11 @@ func (tc *TransCache) GetCloned(chID, itmID string) (cln interface{}, err error)
 	if origVal == nil {
 		return
 	}
-	if _, canClone := origVal.(Cloner); !canClone {
+	cloned, canClone := origVal.(Cloner)
+	if !canClone {
 		return nil, ErrNotClonable
 	}
-	retVals := reflect.ValueOf(origVal).MethodByName("Clone").Call(nil) // Call Clone method on the object
-	errIf := retVals[1].Interface()
-	var notNil bool
-	if err, notNil = errIf.(error); notNil {
-		return
-	}
-	return retVals[0].Interface(), nil
+	return cloned.Clone()
 }
 
 // GetItemIDs returns a list of item IDs matching prefix
