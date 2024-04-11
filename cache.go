@@ -248,8 +248,9 @@ func (c *Cache) cleanExpired() {
 		ci := c.ttlIdx.Back().Value.(*cachedItem)
 		now := time.Now()
 		if now.Before(ci.expiryTime) {
+			remainingTTL := ci.expiryTime.Sub(now)
 			c.Unlock()
-			time.Sleep(ci.expiryTime.Sub(now))
+			time.Sleep(remainingTTL)
 			continue
 		}
 		c.remove(ci.itemID)
