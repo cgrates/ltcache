@@ -8,11 +8,16 @@ TransCache is a bigger version of Cache with support for multiple Cache instance
 package ltcache
 
 import (
+	"bufio"
 	"crypto/rand"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 )
@@ -83,6 +88,8 @@ type TransCache struct {
 	transactionBuffer map[string][]*transactionItem // Queue tasks based on transactionID
 	transBufMux       sync.Mutex                    // Protects the transactionBuffer
 	transactionMux    sync.Mutex                    // Queue transactions on commit
+
+	offCollector *OfflineCollector // used to temporarily hold caching instances, until dumped to file
 }
 
 // cacheInstance returns a specific cache instance based on ID or default
@@ -133,7 +140,7 @@ func (tc *TransCache) CommitTransaction(transID string) {
 	tc.transactionMux.Unlock()
 }
 
-//Get returns the value of an Item
+// Get returns the value of an Item
 func (tc *TransCache) Get(chID, itmID string) (interface{}, bool) {
 	tc.cacheMux.RLock()
 	defer tc.cacheMux.RUnlock()
@@ -148,7 +155,15 @@ func (tc *TransCache) Set(chID, itmID string, value interface{},
 			tc.cacheMux.Lock()
 			defer tc.cacheMux.Unlock()
 		}
-		tc.cacheInstance(chID).Set(itmID, value, groupIDs)
+		c := tc.cacheInstance(chID)
+		c.Set(itmID, value, groupIDs)
+		if tc.offCollector != nil {
+			c.RLock()
+			if err := tc.offCollector.storeCache(chID, itmID, value, c.cache[itmID].expiryTime, groupIDs); err != nil {
+				tc.offCollector.logger.Err(err.Error())
+			}
+			c.RUnlock()
+		}
 	} else {
 		tc.transBufMux.Lock()
 		tc.transactionBuffer[transID] = append(tc.transactionBuffer[transID],
@@ -227,6 +242,9 @@ func (tc *TransCache) Clear(chIDs []string) {
 	}
 	for _, chID := range chIDs {
 		tc.cacheInstance(chID).Clear()
+		if tc.offCollector != nil {
+			tc.offCollector.clearOfflineInstance(chID)
+		}
 	}
 	tc.cacheMux.Unlock()
 }
@@ -291,4 +309,214 @@ func (tc *TransCache) GetCacheStats(chIDs []string) (cs map[string]*CacheStats) 
 	}
 	tc.cacheMux.RUnlock()
 	return
+}
+
+// NewTransCache instantiates a new TransCache with constructed OfflineCollector
+func NewTransCacheWithOfflineCollector(fldrPath string, dumpInterval, rewriteInterval time.Duration, writeLimit int, cfg map[string]*CacheConfig, l logger) (tc *TransCache) {
+	if _, exists := cfg[DefaultCacheInstance]; !exists {
+		cfg[DefaultCacheInstance] = &CacheConfig{MaxItems: -1}
+	}
+	return &TransCache{
+		cache:             make(map[string]*Cache),
+		cfg:               cfg,
+		transactionBuffer: make(map[string][]*transactionItem),
+		offCollector: &OfflineCollector{
+			setCollMux:      make(map[string]*sync.RWMutex),
+			files:           make(map[string]*os.File),
+			writers:         make(map[string]*bufio.Writer),
+			encoders:        make(map[string]*gob.Encoder),
+			writeLimit:      writeLimit,
+			setColl:         make(map[string]map[string]*OfflineCacheEntity),
+			remColl:         make(map[string][]string),
+			folderPath:      fldrPath,
+			dumpInterval:    dumpInterval,
+			rewriteInterval: rewriteInterval,
+			logger:          l,
+			stopWriting:     make(chan struct{}),
+			writeStopped:    make(chan struct{}),
+			stopRewrite:     make(chan struct{}),
+			rewriteStopped:  make(chan struct{}),
+		},
+	}
+}
+
+// Reads from dump files and starts dynamicaly backing up the cache
+func (tc *TransCache) ReadAll() error {
+	if err := ensureDir(tc.offCollector.folderPath); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	errChan := make(chan error, 1)
+	done := make(chan struct{})
+	var tcCacheMux sync.RWMutex
+	for chInstance, config := range tc.cfg {
+		if err := ensureDir(path.Join(tc.offCollector.folderPath, chInstance)); err != nil {
+			return err
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := processDumpFiles(chInstance, tc.offCollector.folderPath, config.MaxItems, config.TTL, config.StaticTTL, tc, &tcCacheMux); err != nil {
+				errChan <- err
+				return
+			}
+		}()
+		if err := tc.offCollector.populateEncoders(chInstance); err != nil {
+			return err
+		}
+		tc.offCollector.setCollMux[chInstance] = new(sync.RWMutex)
+	}
+
+	go func() {
+		wg.Wait()
+		if tc.offCollector.rewriteInterval == -1 {
+			tc.Rewrite()
+		}
+		close(done)
+	}()
+
+	select {
+	case err := <-errChan:
+		return err
+	case <-done:
+		if tc.offCollector.rewriteInterval > 0 {
+			go tc.offCollector.runRewrite()
+		}
+		if tc.offCollector.dumpInterval == -1 {
+			return nil
+		}
+		go tc.asyncWriteEntities()
+		return nil
+	}
+}
+
+// Write the OfflineCollection cache items on file every dumpInterval
+func (tc *TransCache) asyncWriteEntities() {
+	if tc.offCollector.dumpInterval <= 0 {
+		close(tc.offCollector.writeStopped)
+		return
+	}
+	for {
+		select {
+		case <-tc.offCollector.stopWriting: // in case engine is shutdown before interval, dont wait for it
+			close(tc.offCollector.writeStopped)
+			return
+		case <-time.After(tc.offCollector.dumpInterval): // no need to instantly write right after reading from files
+			if err := tc.WriteAll(); err != nil {
+				tc.offCollector.logger.Err(err.Error())
+			}
+		}
+	}
+}
+
+// Dumps all of collected cache in files
+func (tc *TransCache) WriteAll() error {
+	if tc.offCollector == nil {
+		return fmt.Errorf("InternalDB dump not activated")
+	}
+	var wg sync.WaitGroup
+	errChan := make(chan error, 1) // used to stop and return the function if there are errors
+	done := make(chan struct{}, 1) // used to signal when all writing is finished
+	var chInstanceList []string    // will hold coply cache Instance list to avoid concurrency
+	tc.offCollector.allCollMux.RLock()
+	for chI := range tc.offCollector.setColl {
+		tc.offCollector.setCollMux[chI].RLock()
+		if len(tc.offCollector.setColl[chI]) != 0 {
+			chInstanceList = append(chInstanceList, chI)
+		}
+		tc.offCollector.setCollMux[chI].RUnlock()
+	}
+	tc.offCollector.allCollMux.RUnlock()
+	tc.offCollector.remCollMux.RLock()
+	for chI := range tc.offCollector.remColl {
+		if !slices.Contains(chInstanceList, chI) {
+			if len(tc.offCollector.remColl[chI]) != 0 {
+				chInstanceList = append(chInstanceList, chI)
+			}
+		}
+	}
+	tc.offCollector.remCollMux.RUnlock()
+	for _, cachingInstance := range chInstanceList {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			var chacheIDList []string // will hold coply cache IDs list to avoid concurrency
+			tc.offCollector.allCollMux.RLock()
+			tc.cache[cachingInstance].RLock()
+			tc.offCollector.setCollMux[cachingInstance].RLock()
+			defer func() {
+				tc.offCollector.setCollMux[cachingInstance].RUnlock()
+				tc.cache[cachingInstance].RUnlock()
+			}()
+			for chIDLst := range tc.offCollector.setColl[cachingInstance] {
+				chacheIDList = append(chacheIDList, chIDLst)
+			}
+			tc.offCollector.allCollMux.RUnlock()
+			if err := tc.offCollector.writeRemoveEntity(cachingInstance); err != nil {
+				errChan <- err
+				return
+			}
+			for _, cacheID := range chacheIDList {
+				// put cache item in new values so we dont lock cache for entire duration of encoding/writing
+				value := tc.cache[cachingInstance].cache[cacheID].value
+				expiryTime := tc.cache[cachingInstance].cache[cacheID].expiryTime
+				groupIDs := tc.cache[cachingInstance].cache[cacheID].groupIDs
+				if err := tc.offCollector.storeSetEntity(cachingInstance, cacheID, value,
+					expiryTime, groupIDs); err != nil {
+					errChan <- err
+					return
+				}
+				delete(tc.offCollector.setColl[cachingInstance], cacheID)
+			}
+		}()
+	}
+	go func() {
+		wg.Wait()
+		done <- struct{}{}
+	}()
+	select {
+	case err := <-errChan:
+		return err
+	case <-done:
+		return nil
+	}
+}
+
+// Will gather all sets and removes, from dump files and rewrite a new streamlined dump file
+func (tc *TransCache) Rewrite() error {
+	if tc.offCollector == nil {
+		return fmt.Errorf("InternalDB dump not activated")
+	}
+	tc.offCollector.rewrite()
+	return nil
+}
+
+// Depending on dump and rewrite intervals, will write all thats left in cache collector to file and/or rewrite dump files, and close all files after
+func (tc *TransCache) Shutdown() {
+	if tc.offCollector == nil {
+		return
+	}
+	if tc.offCollector.dumpInterval > 0 {
+		tc.offCollector.stopWriting <- struct{}{}
+		<-tc.offCollector.writeStopped
+		if err := tc.WriteAll(); err != nil {
+			tc.offCollector.logger.Err(err.Error())
+		}
+	}
+	if tc.offCollector.rewriteInterval > 0 {
+		tc.offCollector.stopRewrite <- struct{}{}
+		<-tc.offCollector.rewriteStopped
+		tc.offCollector.rewrite()
+	}
+	if tc.offCollector.rewriteInterval == -2 {
+		tc.offCollector.rewrite()
+	}
+	for _, file := range tc.offCollector.files {
+		if err := closeFile(file); err != nil {
+			tc.offCollector.logger.Err(err.Error())
+			continue
+		}
+	}
+
 }
