@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"reflect"
+	"os"
+	"path"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -38,9 +40,9 @@ func GenUUID() string {
 		b[10:])
 }
 
-// Cloner is an interface for objects to clone themselves into interface
-type Cloner interface {
-	Clone() (interface{}, error)
+// CacheCloner is an interface for objects to clone themselves into interface
+type CacheCloner interface {
+	CacheClone() any
 }
 
 type transactionItem struct {
@@ -55,7 +57,8 @@ type CacheConfig struct {
 	MaxItems  int
 	TTL       time.Duration
 	StaticTTL bool
-	OnEvicted func(itmID string, value interface{})
+	OnEvicted []func(itmID string, value interface{})
+	Clone     bool
 }
 
 // NewTransCache instantiates a new TransCache
@@ -69,7 +72,7 @@ func NewTransCache(cfg map[string]*CacheConfig) (tc *TransCache) {
 		transactionBuffer: make(map[string][]*transactionItem),
 	}
 	for cacheID, chCfg := range cfg {
-		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.OnEvicted)
+		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.Clone, chCfg.OnEvicted)
 	}
 	return
 }
@@ -133,7 +136,7 @@ func (tc *TransCache) CommitTransaction(transID string) {
 	tc.transactionMux.Unlock()
 }
 
-//Get returns the value of an Item
+// Get returns the value of an Item
 func (tc *TransCache) Get(chID, itmID string) (interface{}, bool) {
 	tc.cacheMux.RLock()
 	defer tc.cacheMux.RUnlock()
@@ -231,29 +234,6 @@ func (tc *TransCache) Clear(chIDs []string) {
 	tc.cacheMux.Unlock()
 }
 
-// GetCloned returns a clone of an Item if Item is clonable
-func (tc *TransCache) GetCloned(chID, itmID string) (cln interface{}, err error) {
-	tc.cacheMux.RLock()
-	origVal, hasIt := tc.cacheInstance(chID).Get(itmID)
-	tc.cacheMux.RUnlock()
-	if !hasIt {
-		return nil, ErrNotFound
-	}
-	if origVal == nil {
-		return
-	}
-	if _, canClone := origVal.(Cloner); !canClone {
-		return nil, ErrNotClonable
-	}
-	retVals := reflect.ValueOf(origVal).MethodByName("Clone").Call(nil) // Call Clone method on the object
-	errIf := retVals[1].Interface()
-	var notNil bool
-	if err, notNil = errIf.(error); notNil {
-		return
-	}
-	return retVals[0].Interface(), nil
-}
-
 // GetItemIDs returns a list of item IDs matching prefix
 func (tc *TransCache) GetItemIDs(chID, prfx string) (itmIDs []string) {
 	tc.cacheMux.RLock()
@@ -290,5 +270,164 @@ func (tc *TransCache) GetCacheStats(chIDs []string) (cs map[string]*CacheStats) 
 		cs[chID] = tc.cacheInstance(chID).GetCacheStats()
 	}
 	tc.cacheMux.RUnlock()
+	return
+}
+
+// NewTransCacheWithOfflineCollector constructs a new TransCache with OfflineCollector
+// which will dump the caches to fldrPath each dumpInterval(-1 dumps cache as soon as a
+// set/remove is done; 0 disables it). Cache configuration is taken from cfg and logs will
+// be sent to l logger. Limit the size of files in MiB with writeLimit (-1 disables it).
+// When size is exceeded a new file will open to dump the rest of cache items.
+// rewriteInterval will rewrite the dump files to streamline them in intervals (-2 rewrites
+// on shutdown, -1 rewrites before start of dumping, 0 disables it).
+// If TransCache is not created within the "timeout" duration, it will return a timeout error.
+func NewTransCacheWithOfflineCollector(fldrPath, backupPath string, timeout time.Duration, dumpInterval, rewriteInterval time.Duration, writeLimit int, cfg map[string]*CacheConfig, l logger) (tc *TransCache, err error) {
+	if writeLimit <= 0 {
+		return nil, fmt.Errorf("writeLimit has to be bigger than 0. Current writeLimit <%v>", writeLimit)
+	}
+	if _, err = os.Stat(fldrPath); err != nil { // ensure directory exists
+		return nil, err
+	}
+	if _, exists := cfg[DefaultCacheInstance]; !exists {
+		cfg[DefaultCacheInstance] = &CacheConfig{MaxItems: -1}
+	}
+	tc = &TransCache{
+		cache:             make(map[string]*Cache),
+		cfg:               cfg,
+		transactionBuffer: make(map[string][]*transactionItem),
+	}
+	var wg sync.WaitGroup                   // wait for all goroutines to finish reading dump
+	errChan := make(chan error, 1)          // signal error from newCacheFromFolder
+	constructed := make(chan struct{})      // signal transCache constructed
+	for cacheName, config := range tc.cfg { // range over cfg to create each cache and populate TransCache.cache with them
+		// Create folder if it doesnt exist
+		if err := os.MkdirAll(path.Join(fldrPath, cacheName), 0755); err != nil {
+			return nil, err
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			offColl := NewOfflineCollector(path.Join(fldrPath, cacheName), backupPath, writeLimit, (dumpInterval != -1), l, dumpInterval, rewriteInterval)
+			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.Clone, config.OnEvicted)
+			if err != nil {
+				errChan <- err
+				return
+			}
+			tc.cacheMux.Lock() // avoid locking all of tc.cache map while the caching instance isn't constructed yet
+			tc.cache[cacheName] = cache
+			tc.cacheMux.Unlock()
+		}()
+	}
+	go func() { // wait in goroutine for reading from dump to be finished. In cases when an error is returned from newCacheFromFolder, instantly return the error and stop proccessing
+		wg.Wait()
+		close(constructed)
+	}()
+
+	select {
+	case <-time.After(timeout):
+		return nil, fmt.Errorf("Building TransCache from <%s> timed out after <%v>", fldrPath, timeout)
+	case err := <-errChan:
+		return nil, err
+	case <-constructed:
+		return
+	}
+}
+
+// DumpAll collected cache in files
+func (tc *TransCache) DumpAll() (err error) {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(tc.cache)) // Channel to collect errors
+	for cacheKey, cache := range tc.cache {
+		if cache.offCollector == nil {
+			return fmt.Errorf("couldn't dump cache to file, %s offCollector is nil", cacheKey)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := cache.DumpToFile(); err != nil {
+				cache.offCollector.logger.Err(err.Error()) // dont stop other caches from dumping if previous DumpToFile errors
+				errChan <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errChan) // Close the channel after all goroutines are done
+	// Check if there were any errors
+	for err = range errChan {
+		if err != nil { // Set the first error encountered
+			return
+		}
+	}
+	return
+}
+
+// RewriteAll will gather all sets and removes from dump files and rewrite a new streamlined file
+func (tc *TransCache) RewriteAll() (err error) {
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(tc.cache)) // Channel to collect errors
+	for _, cache := range tc.cache {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := cache.RewriteDumpFiles(); err != nil { // dont stop other
+				// caches from rewriting if previous RewriteDumpFiles errors
+				errChan <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errChan) // Close the channel after all goroutines are done
+	// Check if there were any errors
+	for err = range errChan {
+		if err != nil { // Set the first error encountered
+			return
+		}
+	}
+	return
+}
+
+// Shutdown depending on dump and rewrite intervals, will dump all thats left in
+// cache collector to file and/or rewrite files, and close all files
+func (tc *TransCache) Shutdown() {
+	for _, c := range tc.cache {
+		if c.offCollector == nil {
+			return // dont return any error on shutdown where collector was disabled
+		}
+		if err := c.Shutdown(); err != nil { // only log errors to make sure we dont stop other caches from shutting down
+			c.offCollector.logger.Err(err.Error())
+		}
+	}
+}
+
+// BackupDumpFolder will momentarely stop any dumping and rewriting per Cache until their
+// dump folder is backed up in folder path backupFolderPath, making zip true will create
+// a zip file for each Cache dump in the backupFolderPath instead.
+func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err error) {
+	newBackupFldrName := "backups_" +
+		strconv.FormatInt(time.Now().UnixMilli(), 10) // the name that will be used to
+		// create a new backup folder
+	var newBackupFldrPath string // create new backup folder in newBackupFldrPath path
+	// where each Cache dump will be pasted
+	for _, cache := range tc.cache { // lock all dumping or rewriting until function returns
+		if cache.offCollector == nil {
+			return fmt.Errorf("Cache's offCollector is nil")
+		}
+		if backupFolderPath == "" {
+			backupFolderPath = cache.offCollector.backupPath
+		}
+		if !zip {
+			newBackupFldrPath = path.Join(backupFolderPath, newBackupFldrName) // create new backup folder in backupFolderPath path where each Cache dump will be pasted
+			if err = os.MkdirAll(newBackupFldrPath, 0755); err != nil {
+				return
+			}
+			if err = cache.BackupCacheDumpFolder(newBackupFldrPath, false); err != nil {
+				return
+			}
+			continue
+		}
+		if err = cache.BackupCacheDumpFolder(backupFolderPath, true); err != nil {
+			return
+		}
+	}
 	return
 }
