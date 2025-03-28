@@ -9,24 +9,30 @@ A LRU cache with TTL capabilities.
 package ltcache
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/gob"
+	"log"
 	"math/rand"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
 
 var testCIs = []*cachedItem{
-	&cachedItem{itemID: "_1_", value: "one"},
-	&cachedItem{itemID: "_2_", value: "two", groupIDs: []string{"grp1"}},
-	&cachedItem{itemID: "_3_", value: "three", groupIDs: []string{"grp1", "grp2"}},
-	&cachedItem{itemID: "_4_", value: "four", groupIDs: []string{"grp1", "grp2", "grp3"}},
-	&cachedItem{itemID: "_5_", value: "five", groupIDs: []string{"grp4"}},
+	{itemID: "_1_", value: "one"},
+	{itemID: "_2_", value: "two", groupIDs: []string{"grp1"}},
+	{itemID: "_3_", value: "three", groupIDs: []string{"grp1", "grp2"}},
+	{itemID: "_4_", value: "four", groupIDs: []string{"grp1", "grp2", "grp3"}},
+	{itemID: "_5_", value: "five", groupIDs: []string{"grp4"}},
 }
 var lastEvicted string
 
 func TestSetGetRemNoIndexes(t *testing.T) {
-	cache := NewCache(UnlimitedCaching, 0, false,
-		func(itmID string, v interface{}) { lastEvicted = itmID })
+	cache := NewCache(UnlimitedCaching, 0, false, false,
+		[]func(itmID string, value any){func(itmID string, v interface{}) { lastEvicted = itmID }})
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, ci.groupIDs)
 	}
@@ -150,8 +156,8 @@ func TestSetGetRemNoIndexes(t *testing.T) {
 }
 
 func TestGetGroupItems(t *testing.T) {
-	cache := NewCache(UnlimitedCaching, 0, false,
-		func(itmID string, v interface{}) { lastEvicted = itmID })
+	cache := NewCache(UnlimitedCaching, 0, false, false,
+		[]func(itmID string, value any){func(itmID string, v interface{}) { lastEvicted = itmID }})
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, ci.groupIDs)
 	}
@@ -170,7 +176,7 @@ func TestGetGroupItems(t *testing.T) {
 }
 
 func TestSetGetRemLRU(t *testing.T) {
-	cache := NewCache(3, 0, false, nil)
+	cache := NewCache(3, 0, false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -255,7 +261,7 @@ func TestSetGetRemLRU(t *testing.T) {
 }
 
 func TestSetGetRemTTLDynamic(t *testing.T) {
-	cache := NewCache(UnlimitedCaching, time.Duration(10*time.Millisecond), false, nil)
+	cache := NewCache(UnlimitedCaching, time.Duration(10*time.Millisecond), false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -302,7 +308,7 @@ func TestSetGetRemTTLDynamic(t *testing.T) {
 }
 
 func TestSetGetRemTTLStatic(t *testing.T) {
-	cache := NewCache(UnlimitedCaching, time.Duration(10*time.Millisecond), true, nil)
+	cache := NewCache(UnlimitedCaching, time.Duration(10*time.Millisecond), true, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -321,7 +327,7 @@ func TestSetGetRemTTLStatic(t *testing.T) {
 
 func TestSetGetRemLRUttl(t *testing.T) {
 	nrItems := 3
-	cache := NewCache(nrItems, time.Duration(10*time.Millisecond), false, nil)
+	cache := NewCache(nrItems, time.Duration(10*time.Millisecond), false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -379,7 +385,7 @@ func TestSetGetRemLRUttl(t *testing.T) {
 }
 
 func TestCacheDisabled(t *testing.T) {
-	cache := NewCache(DisabledCaching, time.Duration(10*time.Millisecond), false, nil)
+	cache := NewCache(DisabledCaching, time.Duration(10*time.Millisecond), false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 		if _, has := cache.Get(ci.itemID); has {
@@ -444,9 +450,225 @@ func TestCacheGetItemExpiryTime(t *testing.T) {
 	}
 }
 
+func TestCacheSetWithOffCollector(t *testing.T) {
+	var logBuf bytes.Buffer
+	c := NewCache(-1, 0, false, false, []func(itmID string, value any){func(itmID string, value interface{}) {}})
+	c.offCollector = &OfflineCollector{
+		collectSetEntity: true,
+		collection: map[string]*CollectionEntity{
+			"CacheID1": {},
+		},
+		logger: &testLogger{log.New(&logBuf, "", 0)},
+	}
+
+	c.Set("CacheID1", "CacheValue1", []string{"CacheGroup1"})
+	if t1, ok := c.Get("CacheID1"); !ok || t1 != "CacheValue1" {
+		t.Errorf("Expected <CacheValue1>, received <%+v>", t1)
+	}
+	if rcv := logBuf.String(); !strings.Contains(rcv, "") {
+		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
+	}
+	expOC := &OfflineCollector{
+		collectSetEntity: true,
+		collection: map[string]*CollectionEntity{
+			"CacheID1": {
+				IsSet:  true,
+				ItemID: "CacheID1",
+			},
+		},
+		logger: c.offCollector.logger,
+	}
+	if !reflect.DeepEqual(expOC, c.offCollector) {
+		t.Errorf("Expected <%+v>, \nReceived <%+v>", expOC, c.offCollector)
+	}
+}
+
+func TestCacheSetWithOffCollectorErr(t *testing.T) {
+	var logBuf bytes.Buffer
+	c := NewCache(-1, 0, false, false, []func(itmID string, value any){func(itmID string, value interface{}) {}})
+	f, err := os.OpenFile("/tmp/tmpfile", os.O_APPEND|os.O_CREATE|os.O_WRONLY,
+		0644)
+	if err != nil {
+		t.Error(err)
+	}
+	f.Close()
+	defer func() {
+		if err := os.RemoveAll("/tmp/tmpfile"); err != nil {
+			t.Errorf("Failed to delete temporary file: %v", err)
+		}
+	}()
+	c.offCollector = &OfflineCollector{
+		collectSetEntity: false,
+		writeLimit:       1,
+		file:             f,
+		logger:           &testLogger{log.New(&logBuf, "", 0)},
+	}
+
+	c.Set("CacheID1", "CacheValue1", []string{"CacheGroup1"})
+	if t1, ok := c.Get("CacheID1"); !ok || t1 != "CacheValue1" {
+		t.Errorf("Expected <CacheValue1>, received <%+v>", t1)
+	}
+	expErr := "error getting file stat: stat /tmp/tmpfile: file already closed"
+	if rcv := logBuf.String(); !strings.Contains(rcv, expErr) {
+		t.Errorf("Expected <%+v>, \nReceived <%+v>", expErr, rcv)
+	}
+}
+
+func TestCacheDumpToFile(t *testing.T) {
+	var logBuf bytes.Buffer
+	path := "/tmp/internal_db"
+	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Errorf("Failed to delete temporary dir: %v", err)
+		}
+	}()
+	file, err := os.OpenFile(path+"/*default/file1", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Error(err)
+	}
+	writer := bufio.NewWriter(file)
+	encoder := gob.NewEncoder(writer)
+	c := NewCache(-1, 0, false, false, []func(itmID string, value any){func(itmID string, value interface{}) {}})
+	c.cache["item1"] = &cachedItem{itemID: "item1", value: "val1", groupIDs: []string{"gr1"}}
+	c.offCollector = &OfflineCollector{
+		writeLimit:   1000,
+		dumpInterval: 1,
+		file:         file,
+		writer:       writer,
+		encoder:      encoder,
+		logger:       &testLogger{log.New(&logBuf, "", 0)},
+		collection: map[string]*CollectionEntity{
+			"item1": {
+				IsSet:  true,
+				ItemID: "item1",
+			},
+			"item2": {
+				IsSet:  false,
+				ItemID: "item2",
+			},
+		},
+	}
+	if err := c.DumpToFile(); err != nil {
+		t.Error(err)
+	}
+	file.Close()
+	if !reflect.DeepEqual(map[string]*CollectionEntity{}, c.offCollector.collection) {
+		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", c.offCollector.collection)
+	}
+	if rcv := logBuf.String(); !strings.Contains(rcv, "") {
+		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
+	}
+
+	files, err := os.ReadDir(path + "/*default")
+	if err != nil {
+		t.Error(err)
+	}
+	if len(files) != 1 {
+		t.Errorf("expected 1 file, received <%v>", files)
+	}
+	f, err := os.Open(path + "/*default/" + files[0].Name())
+	if err != nil {
+		t.Error(err)
+	}
+	dc := gob.NewDecoder(f)
+	var rcv *OfflineCacheEntity
+	if err := dc.Decode(&rcv); err != nil {
+		t.Error(err)
+	}
+	exp := []*OfflineCacheEntity{
+		{
+			IsSet:    true,
+			ItemID:   "item1",
+			Value:    "val1",
+			GroupIDs: []string{"gr1"},
+		},
+		{
+			IsSet:  false,
+			ItemID: "item2",
+		},
+	}
+	if !reflect.DeepEqual(exp[0], rcv) {
+		if !reflect.DeepEqual(exp[1], rcv) {
+			t.Errorf("expected <%+v>, received <%+v>", exp, rcv)
+		}
+	}
+	rcv = nil
+	if err := dc.Decode(&rcv); err != nil {
+		t.Error(err)
+	}
+	if !reflect.DeepEqual(exp[0], rcv) {
+		if !reflect.DeepEqual(exp[1], rcv) {
+			t.Errorf("expected <%+v>, received <%+v>", exp, rcv)
+		}
+	}
+	if err := dc.Decode(&rcv); err == nil || err.Error() != "EOF" {
+		t.Error(err)
+	}
+}
+
+func TestNewCacheFromFolderErr1(t *testing.T) {
+	_, err := NewCacheFromFolder(&OfflineCollector{fldrPath: "/tmp/doesntExist"}, 0, 0, false, false, nil)
+	expErr := "error walking the path: lstat /tmp/doesntExist: no such file or directory"
+	if err == nil || expErr != err.Error() {
+		t.Errorf("expected error <%+v>, received error <%+v>", expErr, err)
+	}
+}
+
+func TestCacheAsyncDumpEntities(t *testing.T) {
+	path := "/tmp/internal_db"
+	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
+		t.Fatal(err)
+	}
+	tmpFile, err := os.CreateTemp("/tmp/internal_db/*default", "testfile-*.txt")
+	if err != nil {
+		t.Fatalf("Failed to create temporary file: %v", err)
+	}
+	defer func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Errorf("Failed to delete temporary dir: %v", err)
+		}
+	}()
+	writer := bufio.NewWriter(tmpFile)
+	cache := &Cache{
+		maxEntries: -1,
+		cache:      make(map[string]*cachedItem),
+		groups:     make(map[string]map[string]struct{}),
+		offCollector: &OfflineCollector{
+			dumpInterval:     100 * time.Millisecond,
+			dumpStopped:      make(chan struct{}),
+			stopDump:         make(chan struct{}),
+			file:             tmpFile,
+			collectSetEntity: true,
+			collection:       make(map[string]*CollectionEntity),
+			fldrPath:         "/tmp/internal_db/*default",
+			writer:           writer,
+			encoder:          gob.NewEncoder(writer),
+		},
+	}
+	cache.Set("CacheID", "sampleValue", []string{"CacheGroup1"})
+	go func() {
+		cache.asyncDumpEntities()
+		exp := &cachedItem{
+			itemID:     "CacheID",
+			value:      "sampleValue",
+			expiryTime: time.Time{},
+			groupIDs:   []string{"CacheGroup1"},
+		}
+		if !reflect.DeepEqual(exp, cache.cache["CacheID"]) {
+			t.Errorf("Expected <%+v>, Received <%+v>", exp, cache.cache["CacheID"])
+		}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	cache.offCollector.stopDump <- struct{}{}
+	time.Sleep(50 * time.Millisecond)
+}
+
 // BenchmarkSetSimpleCache 	10000000	       228 ns/op
 func BenchmarkSetSimpleCache(b *testing.B) {
-	cache := NewCache(UnlimitedCaching, 0, false, nil)
+	cache := NewCache(UnlimitedCaching, 0, false, false, nil)
 	rand.Seed(time.Now().UTC().UnixNano())
 	min, max := 0, len(testCIs)-1 // so we can have random index
 	for n := 0; n < b.N; n++ {
@@ -457,7 +679,7 @@ func BenchmarkSetSimpleCache(b *testing.B) {
 
 // BenchmarkGetSimpleCache 	20000000	        99.7 ns/op
 func BenchmarkGetSimpleCache(b *testing.B) {
-	cache := NewCache(UnlimitedCaching, 0, false, nil)
+	cache := NewCache(UnlimitedCaching, 0, false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -471,7 +693,7 @@ func BenchmarkGetSimpleCache(b *testing.B) {
 
 // BenchmarkSetLRU         	 5000000	       316 ns/op
 func BenchmarkSetLRU(b *testing.B) {
-	cache := NewCache(3, 0, false, nil)
+	cache := NewCache(3, 0, false, false, nil)
 	rand.Seed(time.Now().UTC().UnixNano())
 	min, max := 0, len(testCIs)-1 // so we can have random index
 	for n := 0; n < b.N; n++ {
@@ -482,7 +704,7 @@ func BenchmarkSetLRU(b *testing.B) {
 
 // BenchmarkGetLRU         	20000000	       114 ns/op
 func BenchmarkGetLRU(b *testing.B) {
-	cache := NewCache(3, 0, false, nil)
+	cache := NewCache(3, 0, false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -496,7 +718,7 @@ func BenchmarkGetLRU(b *testing.B) {
 
 // BenchmarkSetTTL         	50000000	        30.4 ns/op
 func BenchmarkSetTTL(b *testing.B) {
-	cache := NewCache(0, time.Duration(time.Millisecond), false, nil)
+	cache := NewCache(0, time.Duration(time.Millisecond), false, false, nil)
 	rand.Seed(time.Now().UTC().UnixNano())
 	min, max := 0, len(testCIs)-1 // so we can have random index
 	for n := 0; n < b.N; n++ {
@@ -507,7 +729,7 @@ func BenchmarkSetTTL(b *testing.B) {
 
 // BenchmarkGetTTL         	20000000	        88.4 ns/op
 func BenchmarkGetTTL(b *testing.B) {
-	cache := NewCache(0, time.Duration(5*time.Millisecond), false, nil)
+	cache := NewCache(0, time.Duration(5*time.Millisecond), false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
@@ -521,7 +743,7 @@ func BenchmarkGetTTL(b *testing.B) {
 
 // BenchmarkSetLRUttl      	 5000000	       373 ns/op
 func BenchmarkSetLRUttl(b *testing.B) {
-	cache := NewCache(3, time.Duration(time.Millisecond), false, nil)
+	cache := NewCache(3, time.Duration(time.Millisecond), false, false, nil)
 	rand.Seed(time.Now().UTC().UnixNano())
 	min, max := 0, len(testCIs)-1 // so we can have random index
 	for n := 0; n < b.N; n++ {
@@ -532,7 +754,7 @@ func BenchmarkSetLRUttl(b *testing.B) {
 
 // BenchmarkGetLRUttl      	10000000	       187 ns/op
 func BenchmarkGetLRUttl(b *testing.B) {
-	cache := NewCache(3, time.Duration(5*time.Millisecond), false, nil)
+	cache := NewCache(3, time.Duration(5*time.Millisecond), false, false, nil)
 	for _, ci := range testCIs {
 		cache.Set(ci.itemID, ci.value, nil)
 	}
