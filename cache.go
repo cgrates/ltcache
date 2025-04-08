@@ -62,7 +62,7 @@ type Cache struct {
 	offCollector *OfflineCollector // used dump cache to files
 }
 
-// New initializes a new cache.
+// NewCache initializes a new cache.
 func NewCache(maxEntries int, ttl time.Duration, staticTTL, clone bool,
 	onEvicted []func(itmID string, value any)) (c *Cache) {
 	c = &Cache{
@@ -77,9 +77,7 @@ func NewCache(maxEntries int, ttl time.Duration, staticTTL, clone bool,
 		ttlRefs:    make(map[string]*list.Element),
 		clone:      clone,
 	}
-	for _, onEv := range onEvicted {
-		c.onEvicted = append(c.onEvicted, onEv)
-	}
+	c.onEvicted = append(c.onEvicted, onEvicted...)
 	if c.ttl > 0 {
 		go c.cleanExpired()
 	}

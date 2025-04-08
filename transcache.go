@@ -273,19 +273,27 @@ func (tc *TransCache) GetCacheStats(chIDs []string) (cs map[string]*CacheStats) 
 	return
 }
 
-// NewTransCacheWithOfflineCollector constructs a new TransCache with OfflineCollector
-// which will dump the caches to fldrPath each dumpInterval(-1 dumps cache as soon as a
-// set/remove is done; 0 disables it). Cache configuration is taken from cfg and logs will
-// be sent to l logger. Limit the size of files in MiB with writeLimit (-1 disables it).
-// When size is exceeded a new file will open to dump the rest of cache items.
-// rewriteInterval will rewrite the dump files to streamline them in intervals (-2 rewrites
-// on shutdown, -1 rewrites before start of dumping, 0 disables it).
-// If TransCache is not created within the "timeout" duration, it will return a timeout error.
-func NewTransCacheWithOfflineCollector(fldrPath, backupPath string, timeout time.Duration, dumpInterval, rewriteInterval time.Duration, writeLimit int, cfg map[string]*CacheConfig, l logger) (tc *TransCache, err error) {
-	if writeLimit <= 0 {
-		return nil, fmt.Errorf("writeLimit has to be bigger than 0. Current writeLimit <%v>", writeLimit)
+// TransCacheOpts holds the options needed to create a TransCache with OfflineCollector
+type TransCacheOpts struct {
+	DumpPath        string        // path where TransCache will be dumped
+	BackupPath      string        // path where dump files will backup
+	StartTimeout    time.Duration // if time to start TransCache passes this duration, it will stop and return error
+	DumpInterval    time.Duration // dump frequency interval at which cache will be dumped to file (-1 dumps cache as soon as a set/remove is done; 0 disables it)
+	RewriteInterval time.Duration // rewrite the dump files to streamline them, using RewriteInterval. (-2 rewrites on shutdown, -1 rewrites before start of dumping, 0 disables it).
+	WriteLimit      int           // File size limit in bytes. When limit is passed, it creates a new file where cache will be dumped. (only bigger than 0 allowed)
+}
+
+// NewTransCacheWithOfflineCollector constructs a new TransCache with OfflineCollector if opts are
+// provided. If not it runs NewTransCache constructor. Cache configuration is taken from cfg and logs
+// will be sent to l logger.
+func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*CacheConfig, l logger) (tc *TransCache, err error) {
+	if opts == nil { // if no opts are provided, create a TransCache without offline collector
+		return NewTransCache(cfg), nil
 	}
-	if _, err = os.Stat(fldrPath); err != nil { // ensure directory exists
+	if opts.WriteLimit <= 0 {
+		return nil, fmt.Errorf("writeLimit has to be bigger than 0. Current writeLimit <%v> bytes", opts.WriteLimit)
+	}
+	if _, err = os.Stat(opts.DumpPath); err != nil { // ensure directory exists
 		return nil, err
 	}
 	if _, exists := cfg[DefaultCacheInstance]; !exists {
@@ -301,13 +309,13 @@ func NewTransCacheWithOfflineCollector(fldrPath, backupPath string, timeout time
 	constructed := make(chan struct{})      // signal transCache constructed
 	for cacheName, config := range tc.cfg { // range over cfg to create each cache and populate TransCache.cache with them
 		// Create folder if it doesnt exist
-		if err := os.MkdirAll(path.Join(fldrPath, cacheName), 0755); err != nil {
+		if err := os.MkdirAll(path.Join(opts.DumpPath, cacheName), 0755); err != nil {
 			return nil, err
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			offColl := NewOfflineCollector(path.Join(fldrPath, cacheName), backupPath, writeLimit, (dumpInterval != -1), l, dumpInterval, rewriteInterval)
+			offColl := NewOfflineCollector(cacheName, opts, l)
 			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.Clone, config.OnEvicted)
 			if err != nil {
 				errChan <- err
@@ -324,8 +332,8 @@ func NewTransCacheWithOfflineCollector(fldrPath, backupPath string, timeout time
 	}()
 
 	select {
-	case <-time.After(timeout):
-		return nil, fmt.Errorf("Building TransCache from <%s> timed out after <%v>", fldrPath, timeout)
+	case <-time.After(opts.StartTimeout):
+		return nil, fmt.Errorf("building TransCache from <%s> timed out after <%v>", opts.DumpPath, opts.StartTimeout)
 	case err := <-errChan:
 		return nil, err
 	case <-constructed:
@@ -410,7 +418,7 @@ func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err e
 	// where each Cache dump will be pasted
 	for _, cache := range tc.cache { // lock all dumping or rewriting until function returns
 		if cache.offCollector == nil {
-			return fmt.Errorf("Cache's offCollector is nil")
+			return fmt.Errorf("cache's offCollector is nil")
 		}
 		if backupFolderPath == "" {
 			backupFolderPath = cache.offCollector.backupPath
