@@ -49,7 +49,7 @@ type OfflineCollector struct {
 	file             *os.File      // holds the file opened
 	writer           *bufio.Writer // holds the buffer writer
 	encoder          *gob.Encoder  // holds encoder
-	writeLimit       int           // maximum size in MiB that can be written in a singular dump file
+	writeLimit       int           // maximum size in bytes that can be written in a singular dump file
 	logger           logger
 	dumpInterval     time.Duration // holds duration to wait until next dump
 	stopDump         chan struct{} // Used to stop cache dumping inverval
@@ -60,17 +60,16 @@ type OfflineCollector struct {
 }
 
 // NewOfflineCollector construct a new OfflineCollector
-func NewOfflineCollector(fldrPath, backupPath string, writeLimit int, collectSetEntity bool,
-	logger logger, dumpInterval, rewriteInterval time.Duration) *OfflineCollector {
+func NewOfflineCollector(cacheName string, opts *TransCacheOpts, logger logger) *OfflineCollector {
 	return &OfflineCollector{
 		collection:       make(map[string]*CollectionEntity),
-		fldrPath:         fldrPath,
-		backupPath:       backupPath,
-		writeLimit:       writeLimit,
-		collectSetEntity: collectSetEntity,
+		fldrPath:         path.Join(opts.DumpPath, cacheName),
+		backupPath:       opts.BackupPath,
+		writeLimit:       opts.WriteLimit,
+		collectSetEntity: (opts.DumpInterval != -1),
 		logger:           logger,
-		dumpInterval:     dumpInterval,
-		rewriteInterval:  rewriteInterval,
+		dumpInterval:     opts.DumpInterval,
+		rewriteInterval:  opts.RewriteInterval,
 		stopDump:         make(chan struct{}),
 		dumpStopped:      make(chan struct{}),
 		stopRewrite:      make(chan struct{}),
@@ -78,13 +77,13 @@ func NewOfflineCollector(fldrPath, backupPath string, writeLimit int, collectSet
 	}
 }
 
-// Used to temporarily collect cache keys of the items to be dumped to file
+// CollectionEntity is used to temporarily collect cache keys of the items to be dumped to file
 type CollectionEntity struct {
 	IsSet  bool   // Controls if the item that is collected is a SET or a REMOVE of the item from cache
 	ItemID string // Holds the cache ItemID
 }
 
-// Used as the structure to be encoded/decoded per cache item to be dumped to file
+// OfflineCacheEntity is used as the structure to be encoded/decoded per cache item to be dumped to file
 type OfflineCacheEntity struct {
 	IsSet      bool      // Controls if the item that is written is a SET or a REMOVE of the item
 	ItemID     string    // Holds the cache ItemID to be stored in file
@@ -231,9 +230,9 @@ func rotateFileIfNeeded(fldrPath string, writeLimit int, file *os.File) (newFile
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("error getting file stat: %w", err)
 	}
-	// if file size excedes write limit in MiB, close the file and create a new one
+	// if file size excedes write limit in bytes, close the file and create a new one
 	// including new writer and encoder
-	if fileStat.Size() > int64(writeLimit)*1024*1024 {
+	if fileStat.Size() > int64(writeLimit) {
 		var prefix string // give tmpRewriteName prefix to the new file to be created when rewriting files
 		if strings.HasPrefix(filepath.Base(file.Name()), tmpRewriteName) {
 			prefix = tmpRewriteName
@@ -332,7 +331,7 @@ func (coll *OfflineCollector) rewriteFiles() (err error) {
 	for i := range filePaths {
 		if strings.Contains(filePaths[i], zeroRewritePath) {
 			if err = os.Rename(filePaths[i], oldRewritePath+strconv.Itoa(i)); err != nil {
-				return fmt.Errorf("Failed to rename file from <%s>, to <%s>, error <%w>",
+				return fmt.Errorf("failed to rename file from <%s>, to <%s>, error <%w>",
 					zeroRewritePath, oldRewritePath+strconv.Itoa(i), err)
 			}
 			filePaths[i] = oldRewritePath + strconv.Itoa(i)
@@ -345,13 +344,13 @@ func (coll *OfflineCollector) rewriteFiles() (err error) {
 		index := fmt.Sprintf(fmt.Sprintf("%%0%dd", len(strconv.Itoa(len(tmpFilePaths)))), i)
 		zeroRPath := zeroRewritePath + index
 		if err = os.Rename(tmpFilePaths[i], zeroRPath); err != nil {
-			return fmt.Errorf("Failed to rename file from <%s> to <%s>, error <%w> ",
+			return fmt.Errorf("failed to rename file from <%s> to <%s>, error <%w> ",
 				tmpFilePaths[i], zeroRPath, err)
 		}
 	}
 	for i := range filePaths { // remove old redundant files after everything was successful
 		if err = os.Remove(filePaths[i]); err != nil {
-			return fmt.Errorf("Failed to remove file <%s>, error <%w> ", filePaths[i], err)
+			return fmt.Errorf("failed to remove file <%s>, error <%w> ", filePaths[i], err)
 		}
 	}
 	return nil

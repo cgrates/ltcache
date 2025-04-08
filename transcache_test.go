@@ -178,6 +178,23 @@ func TestCacheCount(t *testing.T) {
 	}
 }
 
+func TestTransCacheNilOptsCacheCount(t *testing.T) {
+	tc, err := NewTransCacheWithOfflineCollector(nil, map[string]*CacheConfig{
+		"dst_": {MaxItems: -1},
+		"rpf_": {MaxItems: -1}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set("dst_", "A1", "1", nil, true, "")
+	tc.Set("dst_", "A2", "2", nil, true, "")
+	tc.Set("rpf_", "A3", "3", nil, true, "")
+	tc.Set("dst_", "A4", "4", nil, true, "")
+	tc.Set("dst_", "A5", "5", nil, true, "")
+	if itms := tc.GetItemIDs("dst_", ""); len(itms) != 4 {
+		t.Errorf("Error getting item ids: %+v", itms)
+	}
+}
+
 func TestCacheGetStats(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"part1": {MaxItems: -1},
@@ -866,7 +883,14 @@ func TestNewTransCacheWithOfflineCollector(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "", 1*time.Minute, 10*time.Second, 10*time.Second, 1000, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    10 * time.Second,
+		RewriteInterval: 10 * time.Second,
+		WriteLimit:      1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Error(err)
 	} else if rcv := logBuf.String(); !strings.Contains(rcv, "") {
@@ -901,7 +925,14 @@ func TestNewTransCacheWithOfflineCollector(t *testing.T) {
 
 func TestNewTransCacheWithOfflineCollectorErr1(t *testing.T) {
 	var logBuf bytes.Buffer
-	_, err := NewTransCacheWithOfflineCollector("/tmp/doesntExist"+DefaultCacheInstance, "", 10*time.Second, 1*time.Minute, 10*time.Second, 1000, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	opts := &TransCacheOpts{
+		DumpPath:        "/tmp/doesntExist" + DefaultCacheInstance,
+		StartTimeout:    10 * time.Second,
+		DumpInterval:    1 * time.Minute,
+		RewriteInterval: 10 * time.Second,
+		WriteLimit:      1000,
+	}
+	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	expErr := "stat /tmp/doesntExist*default: no such file or directory"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -914,7 +945,14 @@ func TestNewTransCacheWithOfflineCollectorErr1(t *testing.T) {
 func TestNewTransCacheWithOfflineCollectorErr2(t *testing.T) {
 	path := "/root"
 	var logBuf bytes.Buffer
-	_, err := NewTransCacheWithOfflineCollector(path, "", 1*time.Minute, 10*time.Second, 10*time.Second, 1000, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    10 * time.Second,
+		RewriteInterval: 10 * time.Second,
+		WriteLimit:      1000,
+	}
+	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	expErr := "mkdir /root/*default: permission denied"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -942,7 +980,14 @@ func TestNewTransCacheWithOfflineCollectorErr3(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	_, err = NewTransCacheWithOfflineCollector(path, "", 1*time.Minute, 10*time.Second, 10*time.Second, 1000, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    10 * time.Second,
+		RewriteInterval: 10 * time.Second,
+		WriteLimit:      1000,
+	}
+	_, err = NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	expErr := "failed to decode OfflineCacheEntity at </tmp/internal_db/*default/tmpfile>: unexpected EOF"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -1097,7 +1142,14 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 		t.Errorf("expected 2 files in <%v>, received <%v>", path+"/*default", len(files))
 	}
 	var logBuf bytes.Buffer
-	offColl := NewOfflineCollector(path+"/*default", "", 1000, true, &testLogger{log.New(&logBuf, "", 0)}, 10000*time.Millisecond, -1)
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    10000 * time.Millisecond,
+		RewriteInterval: -1,
+		WriteLimit:      1000,
+	}
+	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
 	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil)
 	if err != nil {
 		t.Error(err)
@@ -1191,7 +1243,13 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 		t.Errorf("expected 2 files in <%v>, received <%v>", path+"/*default", len(files))
 	}
 	var logBuf bytes.Buffer
-	offColl := NewOfflineCollector(path+"/*default", "", -1, true, &testLogger{log.New(&logBuf, "", 0)}, 10000*time.Millisecond, -1)
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		DumpInterval:    10000 * time.Millisecond,
+		RewriteInterval: -1,
+		WriteLimit:      -1,
+	}
+	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
 	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil)
 	if err != nil {
 		t.Error(err)
@@ -1273,7 +1331,13 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 	}
 
 	var logBuf bytes.Buffer
-	offColl := NewOfflineCollector(path+"/*default", "", -1, true, &testLogger{log.New(&logBuf, "", 0)}, 1000*time.Millisecond, 10*time.Millisecond)
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		DumpInterval:    1000 * time.Millisecond,
+		RewriteInterval: 10 * time.Millisecond,
+		WriteLimit:      -1,
+	}
+	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
 	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil)
 	if err != nil {
 		t.Error(err)
@@ -1350,7 +1414,15 @@ func TestTransCacheBackupDumpFolderOK(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "ignoredPath", 1*time.Minute, -1, -1, 1, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "ignoredPath",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		WriteLimit:      1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Fatal(err)
@@ -1464,7 +1536,15 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "ignoredPath", 1*time.Minute, -1, -1, 1, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "ignoredPath",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		WriteLimit:      1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Fatal(err)
@@ -1565,7 +1645,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 }
 func TestTransCacheBackupDumpFolderErr(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{})
-	expErr := "Cache's offCollector is nil"
+	expErr := "cache's offCollector is nil"
 	if err := tc.BackupDumpFolder("", false); err == nil || expErr != err.Error() {
 		t.Errorf("expected <%v>, received <%v>", expErr, err)
 	}
@@ -1589,7 +1669,15 @@ func TestTransCacheBackupDumpFolderEmptyPath(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "/tmp/backups", 1*time.Minute, -1, -1, 1, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "/tmp/backups",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		WriteLimit:      1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Fatal(err)
@@ -1704,7 +1792,15 @@ func TestTransCacheBackupDumpFolderErr2(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "/tmp/backups", 1*time.Minute, -1, -1, 1, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "/tmp/backups",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		WriteLimit:      1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Fatal(err)
@@ -1733,7 +1829,15 @@ func TestTransCacheBackupDumpFolderErr3(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "/tmp/backups", 1*time.Minute, -1, -1, 1, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "/tmp/backups",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		WriteLimit:      1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Fatal(err)
@@ -1762,7 +1866,15 @@ func TestTransCacheBackupDumpFolderErr4(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	tc, err := NewTransCacheWithOfflineCollector(path, "/tmp/backups", 1*time.Minute, -1, -1, 1, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "/tmp/backups",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		WriteLimit:      1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
 		t.Fatal(err)
@@ -1785,8 +1897,9 @@ func TestRunCommandErr(t *testing.T) {
 
 func TestNewTransCacheWithOfflineCollectorWriteLimitErr(t *testing.T) {
 	var logBuf bytes.Buffer
-	expErr := "writeLimit has to be bigger than 0. Current writeLimit <0>"
-	if _, err := NewTransCacheWithOfflineCollector("", "", 0, 0, 0, 0, map[string]*CacheConfig{}, nil); err == nil || expErr != err.Error() {
+	expErr := "writeLimit has to be bigger than 0. Current writeLimit <0> bytes"
+	opts := &TransCacheOpts{}
+	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, nil); err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
 	} else if rcv := logBuf.String(); rcv != "" {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
@@ -1805,8 +1918,16 @@ func TestNewTransCacheWithOfflineCollectorTimeoutErr(t *testing.T) {
 		}
 	}()
 	var logBuf bytes.Buffer
-	expErr := `Building TransCache from </tmp/internal_db> timed out after <0s>`
-	if _, err := NewTransCacheWithOfflineCollector(path, "", 0, 10*time.Second, 10*time.Second, 1000, map[string]*CacheConfig{},
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "",
+		StartTimeout:    0,
+		DumpInterval:    10 * time.Second,
+		RewriteInterval: 10 * time.Second,
+		WriteLimit:      1000,
+	}
+	expErr := `building TransCache from </tmp/internal_db> timed out after <0s>`
+	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)}); err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received error <%v>", expErr, err)
 	} else if rcv := logBuf.String(); rcv != "" {
