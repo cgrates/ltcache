@@ -280,7 +280,7 @@ type TransCacheOpts struct {
 	StartTimeout    time.Duration // if time to start TransCache passes this duration, it will stop and return error
 	DumpInterval    time.Duration // dump frequency interval at which cache will be dumped to file (-1 dumps cache as soon as a set/remove is done; 0 disables it)
 	RewriteInterval time.Duration // rewrite the dump files to streamline them, using RewriteInterval. (-2 rewrites on shutdown, -1 rewrites before start of dumping, 0 disables it).
-	FileSizeLimit   int           // File size limit in bytes. When limit is passed, it creates a new file where cache will be dumped. (only bigger than 0 allowed)
+	FileSizeLimit   int64         // File size limit in bytes. When limit is passed, it creates a new file where cache will be dumped. (only bigger than 0 allowed)
 }
 
 // NewTransCacheWithOfflineCollector constructs a new TransCache with OfflineCollector if opts are

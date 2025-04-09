@@ -49,7 +49,7 @@ type OfflineCollector struct {
 	file             *os.File      // holds the file opened
 	writer           *bufio.Writer // holds the buffer writer
 	encoder          *gob.Encoder  // holds encoder
-	fileSizeLimit    int           // maximum size in bytes that can be written in a singular dump file
+	fileSizeLimit    int64         // maximum size in bytes that can be written in a singular dump file
 	logger           logger
 	dumpInterval     time.Duration // holds duration to wait until next dump
 	stopDump         chan struct{} // Used to stop cache dumping inverval
@@ -224,7 +224,7 @@ func encodeAndDump(oce *OfflineCacheEntity, enc *gob.Encoder, w *bufio.Writer) (
 }
 
 // rotateFileIfNeeded checks the size of the file and rotates it if it exceeds the limit. (not thread safe)
-func rotateFileIfNeeded(fldrPath string, fileSizeLimit int, file *os.File) (newFile *os.File,
+func rotateFileIfNeeded(fldrPath string, fileSizeLimit int64, file *os.File) (newFile *os.File,
 	writer *bufio.Writer, encoder *gob.Encoder, err error) {
 	fileStat, err := file.Stat()
 	if err != nil {
