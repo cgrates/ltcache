@@ -42,9 +42,9 @@ func TestOfflineCollectorWriteEntity(t *testing.T) {
 	oneMibString := strings.Repeat("writing", 1_048_576/len("writing")+1)
 	tmpFile.WriteString(oneMibString)
 	oc := &OfflineCollector{
-		writeLimit: 1,
-		fldrPath:   path + "/*default",
-		file:       tmpFile,
+		fileSizeLimit: 1,
+		fldrPath:      path + "/*default",
+		file:          tmpFile,
 	}
 	if err := oc.writeEntity(&OfflineCacheEntity{}); err != nil {
 		t.Error(err)
@@ -358,10 +358,10 @@ func TestOfflineCollectorStoreRemoveEntityNoInterval(t *testing.T) {
 	}()
 	var encBuf bytes.Buffer
 	oc := &OfflineCollector{
-		writeLimit: 1000,
-		file:       tmpFile,
-		writer:     bufio.NewWriter(&bytes.Buffer{}),
-		encoder:    gob.NewEncoder(&encBuf),
+		fileSizeLimit: 1000,
+		file:          tmpFile,
+		writer:        bufio.NewWriter(&bytes.Buffer{}),
+		encoder:       gob.NewEncoder(&encBuf),
 	}
 	bufExpect := "OfflineCacheEntity"
 	oc.storeRemoveEntity("CacheID1", -1)
@@ -373,8 +373,8 @@ func TestOfflineCollectorStoreRemoveEntityNoInterval(t *testing.T) {
 func TestOfflineCollectorStoreRemoveEntityErr1(t *testing.T) {
 	var logBuf bytes.Buffer
 	oc := &OfflineCollector{
-		writeLimit: 1,
-		logger:     &testLogger{log.New(&logBuf, "", 0)},
+		fileSizeLimit: 1,
+		logger:        &testLogger{log.New(&logBuf, "", 0)},
 	}
 	bufExpect := "error getting file stat: invalid argument"
 	oc.storeRemoveEntity("CacheID1", -1)
