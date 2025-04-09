@@ -686,7 +686,7 @@ func TestTranscacheRewriteAllErr1(t *testing.T) {
 		cache: map[string]*Cache{
 			"testChID1": {
 				offCollector: &OfflineCollector{
-					writeLimit:      1000,
+					fileSizeLimit:   1000,
 					file:            tmpFile,
 					dumpInterval:    -1,
 					rewriteInterval: -1,
@@ -733,7 +733,7 @@ func TestTranscacheShutdownNoIntervalErr(t *testing.T) {
 		cache: map[string]*Cache{
 			DefaultCacheInstance: {
 				offCollector: &OfflineCollector{
-					writeLimit:      1000,
+					fileSizeLimit:   1000,
 					dumpInterval:    -1,
 					rewriteInterval: -1,
 					logger:          &testLogger{log.New(&logBuf, "", 0)},
@@ -888,7 +888,7 @@ func TestNewTransCacheWithOfflineCollector(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    10 * time.Second,
 		RewriteInterval: 10 * time.Second,
-		WriteLimit:      1000,
+		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	if err != nil {
@@ -911,7 +911,7 @@ func TestNewTransCacheWithOfflineCollector(t *testing.T) {
 		collection:       make(map[string]*CollectionEntity),
 		fldrPath:         path + "/" + DefaultCacheInstance,
 		collectSetEntity: true,
-		writeLimit:       1000,
+		fileSizeLimit:    1000,
 		file:             tc.cache[DefaultCacheInstance].offCollector.file,
 		writer:           tc.cache[DefaultCacheInstance].offCollector.writer,
 		encoder:          tc.cache[DefaultCacheInstance].offCollector.encoder,
@@ -930,7 +930,7 @@ func TestNewTransCacheWithOfflineCollectorErr1(t *testing.T) {
 		StartTimeout:    10 * time.Second,
 		DumpInterval:    1 * time.Minute,
 		RewriteInterval: 10 * time.Second,
-		WriteLimit:      1000,
+		FileSizeLimit:   1000,
 	}
 	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	expErr := "stat /tmp/doesntExist*default: no such file or directory"
@@ -950,7 +950,7 @@ func TestNewTransCacheWithOfflineCollectorErr2(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    10 * time.Second,
 		RewriteInterval: 10 * time.Second,
-		WriteLimit:      1000,
+		FileSizeLimit:   1000,
 	}
 	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	expErr := "mkdir /root/*default: permission denied"
@@ -985,7 +985,7 @@ func TestNewTransCacheWithOfflineCollectorErr3(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    10 * time.Second,
 		RewriteInterval: 10 * time.Second,
-		WriteLimit:      1000,
+		FileSizeLimit:   1000,
 	}
 	_, err = NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
 	expErr := "failed to decode OfflineCacheEntity at </tmp/internal_db/*default/tmpfile>: unexpected EOF"
@@ -1022,8 +1022,8 @@ func TestTransCacheDumpAllDumpErr1(t *testing.T) {
 					},
 				},
 				offCollector: &OfflineCollector{
-					dumpInterval: 1 * time.Second,
-					writeLimit:   1,
+					dumpInterval:  1 * time.Second,
+					fileSizeLimit: 1,
 					collection: map[string]*CollectionEntity{
 						"Item1": {
 							IsSet:  true,
@@ -1057,8 +1057,8 @@ func TestTransCacheDumpAllDumpErr2(t *testing.T) {
 					},
 				},
 				offCollector: &OfflineCollector{
-					dumpInterval: 1 * time.Second,
-					writeLimit:   1,
+					dumpInterval:  1 * time.Second,
+					fileSizeLimit: 1,
 					collection: map[string]*CollectionEntity{
 						"Item1": {
 							IsSet:  false,
@@ -1096,7 +1096,7 @@ func TestTransCacheRewriteAllDump0(t *testing.T) {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", expTc, tc)
 	}
 	tc = NewTransCache(map[string]*CacheConfig{})
-	tc.cache[DefaultCacheInstance].offCollector = &OfflineCollector{writeLimit: 1000,
+	tc.cache[DefaultCacheInstance].offCollector = &OfflineCollector{fileSizeLimit: 1000,
 		rewriteInterval: 0, file: tmpFile}
 	expErr := "error <lstat : no such file or directory> walking path <>"
 	if err := tc.RewriteAll(); err == nil || expErr != err.Error() {
@@ -1147,7 +1147,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    10000 * time.Millisecond,
 		RewriteInterval: -1,
-		WriteLimit:      1000,
+		FileSizeLimit:   1000,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
 	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil)
@@ -1247,7 +1247,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 		DumpPath:        path,
 		DumpInterval:    10000 * time.Millisecond,
 		RewriteInterval: -1,
-		WriteLimit:      -1,
+		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
 	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil)
@@ -1335,7 +1335,7 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 		DumpPath:        path,
 		DumpInterval:    1000 * time.Millisecond,
 		RewriteInterval: 10 * time.Millisecond,
-		WriteLimit:      -1,
+		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
 	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil)
@@ -1420,7 +1420,7 @@ func TestTransCacheBackupDumpFolderOK(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    -1,
 		RewriteInterval: -1,
-		WriteLimit:      1,
+		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
@@ -1542,7 +1542,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    -1,
 		RewriteInterval: -1,
-		WriteLimit:      1,
+		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
@@ -1675,7 +1675,7 @@ func TestTransCacheBackupDumpFolderEmptyPath(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    -1,
 		RewriteInterval: -1,
-		WriteLimit:      1,
+		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
@@ -1798,7 +1798,7 @@ func TestTransCacheBackupDumpFolderErr2(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    -1,
 		RewriteInterval: -1,
-		WriteLimit:      1,
+		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
@@ -1835,7 +1835,7 @@ func TestTransCacheBackupDumpFolderErr3(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    -1,
 		RewriteInterval: -1,
-		WriteLimit:      1,
+		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
@@ -1872,7 +1872,7 @@ func TestTransCacheBackupDumpFolderErr4(t *testing.T) {
 		StartTimeout:    1 * time.Minute,
 		DumpInterval:    -1,
 		RewriteInterval: -1,
-		WriteLimit:      1,
+		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
 		&testLogger{log.New(&logBuf, "", 0)})
@@ -1895,9 +1895,9 @@ func TestRunCommandErr(t *testing.T) {
 	}
 }
 
-func TestNewTransCacheWithOfflineCollectorWriteLimitErr(t *testing.T) {
+func TestNewTransCacheWithOfflineCollectorFileSizeLimitErr(t *testing.T) {
 	var logBuf bytes.Buffer
-	expErr := "writeLimit has to be bigger than 0. Current writeLimit <0> bytes"
+	expErr := "fileSizeLimit has to be bigger than 0. Current fileSizeLimit <0> bytes"
 	opts := &TransCacheOpts{}
 	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, nil); err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -1924,7 +1924,7 @@ func TestNewTransCacheWithOfflineCollectorTimeoutErr(t *testing.T) {
 		StartTimeout:    0,
 		DumpInterval:    10 * time.Second,
 		RewriteInterval: 10 * time.Second,
-		WriteLimit:      1000,
+		FileSizeLimit:   1000,
 	}
 	expErr := `building TransCache from </tmp/internal_db> timed out after <0s>`
 	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},

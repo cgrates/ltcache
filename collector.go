@@ -49,7 +49,7 @@ type OfflineCollector struct {
 	file             *os.File      // holds the file opened
 	writer           *bufio.Writer // holds the buffer writer
 	encoder          *gob.Encoder  // holds encoder
-	writeLimit       int           // maximum size in bytes that can be written in a singular dump file
+	fileSizeLimit    int           // maximum size in bytes that can be written in a singular dump file
 	logger           logger
 	dumpInterval     time.Duration // holds duration to wait until next dump
 	stopDump         chan struct{} // Used to stop cache dumping inverval
@@ -65,7 +65,7 @@ func NewOfflineCollector(cacheName string, opts *TransCacheOpts, logger logger) 
 		collection:       make(map[string]*CollectionEntity),
 		fldrPath:         path.Join(opts.DumpPath, cacheName),
 		backupPath:       opts.BackupPath,
-		writeLimit:       opts.WriteLimit,
+		fileSizeLimit:    opts.FileSizeLimit,
 		collectSetEntity: (opts.DumpInterval != -1),
 		logger:           logger,
 		dumpInterval:     opts.DumpInterval,
@@ -224,15 +224,15 @@ func encodeAndDump(oce *OfflineCacheEntity, enc *gob.Encoder, w *bufio.Writer) (
 }
 
 // rotateFileIfNeeded checks the size of the file and rotates it if it exceeds the limit. (not thread safe)
-func rotateFileIfNeeded(fldrPath string, writeLimit int, file *os.File) (newFile *os.File,
+func rotateFileIfNeeded(fldrPath string, fileSizeLimit int, file *os.File) (newFile *os.File,
 	writer *bufio.Writer, encoder *gob.Encoder, err error) {
 	fileStat, err := file.Stat()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("error getting file stat: %w", err)
 	}
-	// if file size excedes write limit in bytes, close the file and create a new one
+	// if file size excedes the limit in bytes, close the file and create a new one
 	// including new writer and encoder
-	if fileStat.Size() > int64(writeLimit) {
+	if fileStat.Size() > int64(fileSizeLimit) {
 		var prefix string // give tmpRewriteName prefix to the new file to be created when rewriting files
 		if strings.HasPrefix(filepath.Base(file.Name()), tmpRewriteName) {
 			prefix = tmpRewriteName
@@ -251,7 +251,7 @@ func (coll *OfflineCollector) writeEntity(oce *OfflineCacheEntity) error {
 	defer coll.fileMux.Unlock()
 	var err error
 	if file, writer, encoder, err := rotateFileIfNeeded(coll.fldrPath,
-		coll.writeLimit, coll.file); err != nil {
+		coll.fileSizeLimit, coll.file); err != nil {
 		return err
 	} else if encoder != nil { // if rotateFileIfNeeded encoder returned nil it means rotating files
 		//  wasnt needed and didnt happen
@@ -311,7 +311,7 @@ func (coll *OfflineCollector) rewriteFiles() (err error) {
 	// range over the streamlined cache items read from dump, and write each one in
 	// temporary tmpRewritePath file
 	for _, oce := range oceMap {
-		if newFile, newWriter, newEnc, err := rotateFileIfNeeded(coll.fldrPath, coll.writeLimit,
+		if newFile, newWriter, newEnc, err := rotateFileIfNeeded(coll.fldrPath, coll.fileSizeLimit,
 			file); err != nil {
 			return fmt.Errorf("error rewriting <%w>", err)
 		} else if newEnc != nil { // if rotateFileIfNeeded encoder returned nil it means rotating

@@ -499,7 +499,7 @@ func TestCacheSetWithOffCollectorErr(t *testing.T) {
 	}()
 	c.offCollector = &OfflineCollector{
 		collectSetEntity: false,
-		writeLimit:       1,
+		fileSizeLimit:    1,
 		file:             f,
 		logger:           &testLogger{log.New(&logBuf, "", 0)},
 	}
@@ -534,12 +534,12 @@ func TestCacheDumpToFile(t *testing.T) {
 	c := NewCache(-1, 0, false, false, []func(itmID string, value any){func(itmID string, value interface{}) {}})
 	c.cache["item1"] = &cachedItem{itemID: "item1", value: "val1", groupIDs: []string{"gr1"}}
 	c.offCollector = &OfflineCollector{
-		writeLimit:   1000,
-		dumpInterval: 1,
-		file:         file,
-		writer:       writer,
-		encoder:      encoder,
-		logger:       &testLogger{log.New(&logBuf, "", 0)},
+		fileSizeLimit: 1000,
+		dumpInterval:  1,
+		file:          file,
+		writer:        writer,
+		encoder:       encoder,
+		logger:        &testLogger{log.New(&logBuf, "", 0)},
 		collection: map[string]*CollectionEntity{
 			"item1": {
 				IsSet:  true,
