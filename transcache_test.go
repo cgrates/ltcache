@@ -1643,7 +1643,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
 	}
 }
-func TestTransCacheBackupDumpFolderErr(t *testing.T) {
+func TestTransCacheBackupDumpFolderErr1(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{})
 	expErr := "cache's offCollector is nil"
 	if err := tc.BackupDumpFolder("", false); err == nil || expErr != err.Error() {
@@ -1788,6 +1788,9 @@ func TestTransCacheBackupDumpFolderErr2(t *testing.T) {
 			t.Errorf("Failed to delete temporary dir: %v", err)
 		}
 		if err := os.RemoveAll(bkupPath); err != nil {
+			t.Errorf("Failed to delete temporary dir: %v", err)
+		}
+		if err := os.RemoveAll("..."); err != nil {
 			t.Errorf("Failed to delete temporary dir: %v", err)
 		}
 	}()

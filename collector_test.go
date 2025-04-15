@@ -8,13 +8,16 @@ package ltcache
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
 	"encoding/gob"
+	"fmt"
 	"log"
 	"os"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPopulateEncodersErr(t *testing.T) {
@@ -429,5 +432,157 @@ func TestOfflineCollectorShouldSkipRewriteFalse(t *testing.T) {
 	if shouldSkipRewrite([]string{path + "/file1", path + "/file2"},
 		"") {
 		t.Errorf("Expected shouldSkipRewrite false, received true")
+	}
+}
+
+func BenchmarkEncodeAndDumpVeryLarge(b *testing.B) {
+	type VeryLargeStruct struct {
+		ID         string
+		Values     []float64
+		LongText   string
+		BinaryData []byte
+		Metadata   map[string]string
+		Tags       []string
+		CreatedAt  time.Time
+	}
+	gob.Register(new(VeryLargeStruct))
+	randomBytes := make([]byte, 1024*1024) // 1MB of random data
+	rand.Read(randomBytes)
+
+	metadata := make(map[string]string)
+	for i := range 100 {
+		metadata[fmt.Sprintf("key-%d", i)] = fmt.Sprintf("value-%d", i)
+	}
+
+	payload := &OfflineCacheEntity{
+		IsSet:  true,
+		ItemID: "very-large-id",
+		Value: &VeryLargeStruct{
+			ID:         "very-large-struct-789",
+			Values:     make([]float64, 5000),
+			LongText:   strings.Repeat("Lorem ipsum dolor sit amet, consectetur adipiscing elit. ", 500),
+			BinaryData: randomBytes,
+			Metadata:   metadata,
+			Tags:       make([]string, 200),
+			CreatedAt:  time.Now(),
+		},
+		GroupIDs:   make([]string, 20),
+		ExpiryTime: time.Now().Add(time.Hour),
+	}
+
+	buf := new(bytes.Buffer)
+	w := bufio.NewWriter(buf)
+	enc := gob.NewEncoder(w)
+	for b.Loop() {
+		err := encodeAndDump(payload, enc, w)
+		if err != nil {
+			b.Fatalf("error in encodeAndDump: %v", err)
+		}
+	}
+}
+
+func BenchmarkEncodeAndDumpLarge(b *testing.B) {
+	type LargeStruct struct {
+		ID          string
+		Values      []float64
+		Metadata    map[string]string
+		Tags        []string
+		Description string
+		CreatedAt   time.Time
+	}
+	gob.Register(new(LargeStruct))
+
+	metadata := make(map[string]string)
+	for i := range 50 {
+		metadata[fmt.Sprintf("key-%d", i)] = fmt.Sprintf("value-%d", i)
+	}
+
+	payload := &OfflineCacheEntity{
+		IsSet:  true,
+		ItemID: "large-id",
+		Value: &LargeStruct{
+			ID:          "large-struct-456",
+			Values:      make([]float64, 1000),
+			Metadata:    metadata,
+			Tags:        make([]string, 100),
+			Description: strings.Repeat("Lorem ipsum dolor sit amet ", 20),
+			CreatedAt:   time.Now(),
+		},
+		GroupIDs:   []string{"group1", "group2", "group3", "group4", "group5"},
+		ExpiryTime: time.Now().Add(time.Hour),
+	}
+
+	buf := new(bytes.Buffer)
+	w := bufio.NewWriter(buf)
+	enc := gob.NewEncoder(w)
+	for b.Loop() {
+		err := encodeAndDump(payload, enc, w)
+		if err != nil {
+			b.Fatalf("error in encodeAndDump: %v", err)
+		}
+	}
+}
+
+func BenchmarkEncodeAndDumpMedium(b *testing.B) {
+	type MediumStruct struct {
+		ID        string
+		Values    []int
+		Metadata  map[string]string
+		CreatedAt time.Time
+	}
+	gob.Register(new(MediumStruct))
+
+	metadata := make(map[string]string)
+	for i := range 10 {
+		metadata[fmt.Sprintf("key-%d", i)] = fmt.Sprintf("value-%d", i)
+	}
+
+	payload := &OfflineCacheEntity{
+		IsSet:  true,
+		ItemID: "medium-id",
+		Value: &MediumStruct{
+			ID:        "medium-struct-123",
+			Values:    make([]int, 100),
+			Metadata:  metadata,
+			CreatedAt: time.Now(),
+		},
+		GroupIDs:   []string{"group1", "group2", "group3"},
+		ExpiryTime: time.Now().Add(time.Hour),
+	}
+
+	buf := new(bytes.Buffer)
+	w := bufio.NewWriter(buf)
+	enc := gob.NewEncoder(w)
+	for b.Loop() {
+		err := encodeAndDump(payload, enc, w)
+		if err != nil {
+			b.Fatalf("error in encodeAndDump: %v", err)
+		}
+	}
+}
+
+func BenchmarkEncodeAndDumpSmall(b *testing.B) {
+	type SmallStruct struct {
+		Name  string
+		Value int
+	}
+	gob.Register(new(SmallStruct))
+
+	payload := OfflineCacheEntity{
+		IsSet:      true,
+		ItemID:     "small-id",
+		Value:      &SmallStruct{Name: "Test", Value: 42},
+		GroupIDs:   []string{"group1"},
+		ExpiryTime: time.Now().Add(time.Hour),
+	}
+
+	buf := new(bytes.Buffer)
+	w := bufio.NewWriter(buf)
+	enc := gob.NewEncoder(w)
+	for b.Loop() {
+		err := encodeAndDump(&payload, enc, w)
+		if err != nil {
+			b.Fatalf("error in encodeAndDump: %v", err)
+		}
 	}
 }
