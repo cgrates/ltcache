@@ -14,6 +14,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -1440,7 +1441,7 @@ func TestTransCacheBackupDumpFolderOK(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if info.IsDir() && strings.Contains(info.Name(), "backups_") && !found {
+			if info.IsDir() && strings.Contains(info.Name(), "backup_") && !found {
 				bkupFldrPath = filepath.Join(bkupPath, info.Name())
 				found = true
 			}
@@ -1554,15 +1555,17 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 	if err := tc.BackupDumpFolder(bkupPath, true); err != nil {
 		t.Fatal(err)
 	}
-	zippedBackups, err := filepath.Glob(filepath.Join(bkupPath, "*default", "backup_*"))
+	zippedBackups, err := filepath.Glob(bkupPath + "/backup_*")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(zippedBackups) != 1 {
 		t.Errorf("expected 1 zipped backup, received <%v>", zippedBackups)
 	}
-	if err := runCommand("unzip", []string{zippedBackups[0], "-d", bkupPath}); err != nil {
-		t.Error(err)
+	cmd := exec.Command("unzip", zippedBackups[0], "-d", bkupPath)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("command <%v> failed with error <%v>, Output <%v>", cmd, err, output)
 	}
 	if err := os.RemoveAll(zippedBackups[0]); err != nil {
 		t.Errorf("Failed to delete temporary dir: %v", err)
@@ -1586,7 +1589,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	bkup, err := getFiles(bkupPath + "/" + DefaultCacheInstance)
+	bkup, err := getFiles(bkupPath + "/db/" + DefaultCacheInstance)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1615,7 +1618,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 	}
 	for _, of := range org {
 		orgFilePath := filepath.Join(path, of)
-		bkupFilePath := filepath.Join(bkupPath, of)
+		bkupFilePath := filepath.Join(bkupPath, "db", of)
 
 		orgFile, err := os.Stat(orgFilePath)
 		if err != nil {
@@ -1645,7 +1648,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 }
 func TestTransCacheBackupDumpFolderErr1(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{})
-	expErr := "cache's offCollector is nil"
+	expErr := "cache offCollector is nil"
 	if err := tc.BackupDumpFolder("", false); err == nil || expErr != err.Error() {
 		t.Errorf("expected <%v>, received <%v>", expErr, err)
 	}
@@ -1695,7 +1698,7 @@ func TestTransCacheBackupDumpFolderEmptyPath(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if info.IsDir() && strings.Contains(info.Name(), "backups_") && !found {
+			if info.IsDir() && strings.Contains(info.Name(), "backup_") && !found {
 				bkupFldrPath = filepath.Join(bkupPath, info.Name())
 				found = true
 			}
@@ -1774,87 +1777,6 @@ func TestTransCacheBackupDumpFolderEmptyPath(t *testing.T) {
 
 }
 
-func TestTransCacheBackupDumpFolderErr2(t *testing.T) {
-	path := "/tmp/db"
-	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
-		t.Fatal(err)
-	}
-	bkupPath := "/tmp/backups"
-	if err := os.MkdirAll(bkupPath, 0755); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.RemoveAll(path); err != nil {
-			t.Errorf("Failed to delete temporary dir: %v", err)
-		}
-		if err := os.RemoveAll(bkupPath); err != nil {
-			t.Errorf("Failed to delete temporary dir: %v", err)
-		}
-		if err := os.RemoveAll("..."); err != nil {
-			t.Errorf("Failed to delete temporary dir: %v", err)
-		}
-	}()
-	var logBuf bytes.Buffer
-	opts := &TransCacheOpts{
-		DumpPath:        path,
-		BackupPath:      "/tmp/backups",
-		StartTimeout:    1 * time.Minute,
-		DumpInterval:    -1,
-		RewriteInterval: -1,
-		FileSizeLimit:   1,
-	}
-	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tc.Set(DefaultCacheInstance, "newItem", "val", nil, true, "")
-	time.Sleep(20 * time.Millisecond)
-	expErr := `command <sh> failed with error <exit status 15>, Output <zip I/O error: No such file or directory
-zip error: Could not create output file (.../*default/backup_*default`
-	if err := tc.BackupDumpFolder("...", true); err == nil ||
-		!strings.HasPrefix(err.Error(), expErr) {
-		t.Errorf("expected error <%v>, \nreceived <%v>", expErr, err)
-	}
-}
-
-func TestTransCacheBackupDumpFolderErr3(t *testing.T) {
-	path := "/tmp/db"
-	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := os.RemoveAll(path); err != nil {
-			t.Errorf("Failed to delete temporary dir: %v", err)
-		}
-		if err := os.RemoveAll("-"); err != nil {
-			t.Errorf("Failed to delete temporary dir: %v", err)
-		}
-	}()
-	var logBuf bytes.Buffer
-	opts := &TransCacheOpts{
-		DumpPath:        path,
-		BackupPath:      "/tmp/backups",
-		StartTimeout:    1 * time.Minute,
-		DumpInterval:    -1,
-		RewriteInterval: -1,
-		FileSizeLimit:   1,
-	}
-	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tc.Set(DefaultCacheInstance, "newItem", "val", nil, true, "")
-	time.Sleep(20 * time.Millisecond)
-	expErr := `command <cp> failed with error <exit status 1>, Output <cp: invalid option -- '/'
-Try 'cp --help' for more information.
->`
-	if err := tc.BackupDumpFolder("-", false); err == nil || err.Error() != expErr {
-		t.Errorf("expected error <%v>, \nreceived <%v>", expErr, err)
-	}
-}
-
 func TestTransCacheBackupDumpFolderErr4(t *testing.T) {
 	path := "/tmp/db"
 	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
@@ -1888,13 +1810,6 @@ func TestTransCacheBackupDumpFolderErr4(t *testing.T) {
 	if err := tc.BackupDumpFolder("/", false); err == nil ||
 		!strings.HasSuffix(err.Error(), expErr) {
 		t.Errorf("expected error <%v>, \nreceived <%v>", expErr, err)
-	}
-}
-
-func TestRunCommandErr(t *testing.T) {
-	expErr := `command <bad command> failed with error <exec: "bad command": executable file not found in $PATH>, Output <>`
-	if err := runCommand("bad command", []string{}); err == nil || expErr != err.Error() {
-		t.Errorf("expected error <%v>, received error <%v>", expErr, err)
 	}
 }
 

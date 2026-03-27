@@ -10,12 +10,12 @@ Original ideas from golang groupcache/lru.go
 package ltcache
 
 import (
+	"archive/zip"
 	"container/list"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -442,7 +442,7 @@ func (c *Cache) asyncDumpEntities() {
 // RewriteDumpFiles rewrites dump files of specified c Cache
 func (c *Cache) RewriteDumpFiles() error {
 	if c.offCollector == nil {
-		return fmt.Errorf("couldn't rewrite dump files, Cache's offCollector is nil")
+		return fmt.Errorf("couldn't rewrite dump files, Cache offCollector is nil")
 	}
 	return c.offCollector.rewriteFiles()
 }
@@ -450,7 +450,7 @@ func (c *Cache) RewriteDumpFiles() error {
 // DumpToFile dumps to file all of collected cache. (is thread safe)
 func (c *Cache) DumpToFile() (err error) {
 	if c.offCollector == nil {
-		return fmt.Errorf("couldn't dump cache to file, Cache's offCollector is nil")
+		return fmt.Errorf("couldn't dump cache to file, Cache offCollector is nil")
 	}
 	if c.offCollector.dumpInterval == 0 {
 		return ErrDumpIntervalDisabled
@@ -531,21 +531,9 @@ func closeFile(file *os.File) (err error) {
 	return
 }
 
-// runCommand is used to run cp or zip linux commands
-func runCommand(command string, args []string) (err error) {
-	// Run the command with arguments
-	cmd := exec.Command(command, args...)
-	// Run the command and get the output
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("command <%s> failed with error <%w>, Output <%s>", command, err, output)
-	}
-	return
-}
-
 // BackupCacheDumpFolder will backup the dump folder of the cache in backupFolderPath. zip true will compress the Cache dump folder and puts it in backupFolderPath (thread safe)
 func (c *Cache) BackupCacheDumpFolder(backupFolderPath string, zip bool) (err error) {
-	if backupFolderPath == "" { // take default path if empty
+	if backupFolderPath == "" {
 		backupFolderPath = c.offCollector.backupPath
 	}
 	if c.offCollector.rewriteInterval != 0 {
@@ -554,22 +542,87 @@ func (c *Cache) BackupCacheDumpFolder(backupFolderPath string, zip bool) (err er
 	}
 	c.offCollector.fileMux.Lock()
 	defer c.offCollector.fileMux.Unlock()
-	cacheName := filepath.Base(c.offCollector.fldrPath) // holds cache name, example:
-	// *default
-	cacheBackupPath := filepath.Join(backupFolderPath, cacheName) // path where this cache's
-	// dump folder will be backed up, example /backupFolderPath/*default
-	if !zip { // copy cache folder into backup folder
-		// cp -r /dumpPath/*default /backupFolderPath/*default
-		return runCommand("cp", []string{"-r", c.offCollector.fldrPath, cacheBackupPath})
+	cacheName := filepath.Base(c.offCollector.fldrPath)
+	cacheBackupPath := filepath.Join(backupFolderPath, cacheName)
+	if !zip {
+		return copyFolder(c.offCollector.fldrPath, cacheBackupPath)
 	}
-	if err = os.MkdirAll(cacheBackupPath, 0755); err != nil { // create the cache backup folder "/backupfolder/*default"
+	if err = os.MkdirAll(cacheBackupPath, 0755); err != nil {
 		return
 	}
-	cdFldr := filepath.Dir(c.offCollector.fldrPath) // current directory to go to, so the
-	// zipped file doesnt unnecessarily take the parent folder path "/tmp/internal_db/datadb" out of "/tmp/internal_db/datadb/*default"
+	zipFilePath := filepath.Join(cacheBackupPath, "backup_"+cacheName+
+		strconv.FormatInt(time.Now().UnixMilli(), 10)+".zip")
 
-	// sh -c cd /tmp/inetrnal_db/datadb && zip -r /backupFolderPath/*default/backup_*defaultUnixTime.zip *default
-	return runCommand("sh", []string{"-c", "cd " + cdFldr + " && zip -r " +
-		path.Join(cacheBackupPath, "backup_"+cacheName+
-			strconv.FormatInt(time.Now().UnixMilli(), 10)+".zip") + " " + cacheName})
+	return zipFolder(c.offCollector.fldrPath, zipFilePath)
+}
+
+// copyFolder recursively copies srcFolder to destFolder, preserving structure and permissions.
+func copyFolder(srcFolder, destFolder string) error {
+	return filepath.Walk(srcFolder, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(srcFolder, path)
+		if err != nil {
+			return err
+		}
+		destPath := filepath.Join(destFolder, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(destPath, info.Mode())
+		}
+		return copyFile(path, destPath, info.Mode())
+	})
+}
+
+// copyFile copies a single file from src to dest with the given permissions.
+func copyFile(src, dest string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+// zipFolder archives the contents of srcFolder into a zip file at destZip
+func zipFolder(srcFolder, destZip string) error {
+	zipFile, err := os.Create(destZip)
+	if err != nil {
+		return err
+	}
+	defer zipFile.Close()
+	writer := zip.NewWriter(zipFile)
+	defer writer.Close()
+	baseDir := filepath.Dir(srcFolder)
+	return filepath.Walk(srcFolder, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(baseDir, path)
+		if err != nil {
+			return err
+		}
+		zipEntry := filepath.ToSlash(relPath)
+		if info.IsDir() {
+			_, err = writer.Create(zipEntry + "/")
+			return err
+		}
+		w, err := writer.Create(zipEntry)
+		if err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		_, err = io.Copy(w, f)
+		return err
+	})
 }

@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -409,33 +410,42 @@ func (tc *TransCache) Shutdown() {
 
 // BackupDumpFolder will momentarely stop any dumping and rewriting per Cache until their
 // dump folder is backed up in folder path backupFolderPath, making zip true will create
-// a zip file for each Cache dump in the backupFolderPath instead.
+// a zip file from the dump folder in the backupFolderPath instead.
 func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err error) {
-	newBackupFldrName := "backups_" +
+	newBackupFldrName := "backup_" +
 		strconv.FormatInt(time.Now().UnixMilli(), 10) // the name that will be used to
-		// create a new backup folder
+	// create a new backup folder
 	var newBackupFldrPath string // create new backup folder in newBackupFldrPath path
 	// where each Cache dump will be pasted
+	var dumpFolderPath string        // path to the main dump folder
 	for _, cache := range tc.cache { // lock all dumping or rewriting until function returns
 		if cache.offCollector == nil {
-			return fmt.Errorf("cache's offCollector is nil")
+			return fmt.Errorf("cache offCollector is nil")
 		}
 		if backupFolderPath == "" {
 			backupFolderPath = cache.offCollector.backupPath
 		}
-		if !zip {
-			newBackupFldrPath = path.Join(backupFolderPath, newBackupFldrName) // create new backup folder in backupFolderPath path where each Cache dump will be pasted
-			if err = os.MkdirAll(newBackupFldrPath, 0755); err != nil {
-				return
-			}
-			if err = cache.BackupCacheDumpFolder(newBackupFldrPath, false); err != nil {
-				return
-			}
-			continue
+		// wait for any live file writting to be finished using fileMux locker
+		cache.offCollector.fileMux.Lock()
+		defer cache.offCollector.fileMux.Unlock()
+		// wait for any file rewriting to be finished using rewriteMux locker
+		if cache.offCollector.rewriteInterval != 0 {
+			cache.offCollector.rewriteMux.Lock()
+			defer cache.offCollector.rewriteMux.Unlock()
 		}
-		if err = cache.BackupCacheDumpFolder(backupFolderPath, true); err != nil {
-			return
+		if dumpFolderPath == "" {
+			dumpFolderPath = filepath.Dir(cache.offCollector.fldrPath)
 		}
 	}
-	return
+	newBackupFldrPath = path.Join(backupFolderPath, newBackupFldrName) // create new backup folder in backupFolderPath path where the whole DumpFolder full be pasted
+	if !zip {
+		if err = os.MkdirAll(newBackupFldrPath, 0755); err != nil {
+			return
+		}
+		return copyFolder(dumpFolderPath, newBackupFldrPath)
+	}
+	if err = os.MkdirAll(backupFolderPath, 0755); err != nil {
+		return
+	}
+	return zipFolder(dumpFolderPath, newBackupFldrPath+".zip")
 }
