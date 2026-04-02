@@ -8,16 +8,23 @@ TransCache is a bigger version of Cache with support for multiple Cache instance
 package ltcache
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/rand"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/exp/mmap"
 )
 
 const (
@@ -163,7 +170,7 @@ func (tc *TransCache) Set(chID, itmID string, value interface{},
 	}
 }
 
-// RempveItem removes an item from the cache
+// Remove removes an item from the cache
 func (tc *TransCache) Remove(chID, itmID string, commit bool, transID string) {
 	if commit {
 		if transID == "" { // Lock per operation not transaction
@@ -322,7 +329,7 @@ func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*Cac
 				errChan <- err
 				return
 			}
-			tc.cacheMux.Lock() // avoid locking all of tc.cache map while the caching instance isn't constructed yet
+			tc.cacheMux.Lock()
 			tc.cache[cacheName] = cache
 			tc.cacheMux.Unlock()
 		}()
@@ -410,7 +417,7 @@ func (tc *TransCache) Shutdown() {
 
 // BackupDumpFolder will momentarely stop any dumping and rewriting per Cache until their
 // dump folder is backed up in folder path backupFolderPath, making zip true will create
-// a zip file from the dump folder in the backupFolderPath instead.
+// a zip file from the dump folder in the backupFolderPath instead and add ".zip" suffix at the end of the created zip file.
 func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err error) {
 	newBackupFldrName := "backup_" +
 		strconv.FormatInt(time.Now().UnixMilli(), 10) // the name that will be used to
@@ -421,9 +428,6 @@ func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err e
 	for _, cache := range tc.cache { // lock all dumping or rewriting until function returns
 		if cache.offCollector == nil {
 			return fmt.Errorf("cache offCollector is nil")
-		}
-		if backupFolderPath == "" {
-			backupFolderPath = cache.offCollector.backupPath
 		}
 		// wait for any live file writting to be finished using fileMux locker
 		cache.offCollector.fileMux.Lock()
@@ -437,6 +441,12 @@ func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err e
 			dumpFolderPath = filepath.Dir(cache.offCollector.fldrPath)
 		}
 	}
+	if backupFolderPath == "" {
+		backupFolderPath, err = tc.backupPath()
+		if err != nil {
+			return err
+		}
+	}
 	newBackupFldrPath = path.Join(backupFolderPath, newBackupFldrName) // create new backup folder in backupFolderPath path where the whole DumpFolder full be pasted
 	if !zip {
 		if err = os.MkdirAll(newBackupFldrPath, 0755); err != nil {
@@ -448,4 +458,180 @@ func (tc *TransCache) BackupDumpFolder(backupFolderPath string, zip bool) (err e
 		return
 	}
 	return zipFolder(dumpFolderPath, newBackupFldrPath+".zip")
+}
+
+// backupPath returns the backupPath string from TransCache
+func (tc *TransCache) backupPath() (string, error) {
+	for _, cache := range tc.cache {
+		return cache.offCollector.backupPath, nil
+	}
+	return "", errors.New("empty BackupPath")
+}
+
+// dumpFolderPath returns the DumpFolder string from TransCache
+func (tc *TransCache) dumpFolderPath() (string, error) {
+	for _, cache := range tc.cache {
+		return cache.offCollector.fldrPath, nil
+	}
+	return "", errors.New("empty DumpFolderPath")
+}
+
+// Restore attempts to restore the TransCache from the latest backup in the specified backupPath.
+// If backupPath is not specified, it will be taken from the cache backup path.
+// or "backup_<unix_ms_timestamp>.zip" for zip files. The backup files will be added on top of what already exists in dump folders,
+// and any overlapping cache entities will be overwritten with the restored entities.
+func (tc *TransCache) Restore(backupPath string) (err error) {
+	if backupPath == "" {
+		backupPath, err = tc.backupPath()
+		if err != nil {
+			return err
+		}
+	}
+	// Read all entries in the backup directory
+	entries, err := os.ReadDir(backupPath)
+	if err != nil {
+		return fmt.Errorf("failed to read backup directory: %w", err)
+	}
+
+	// Find all valid backup entries and pick the latest by unix ms timestamp
+	const prefix = "backup_"
+	var latestName string   // holds latest backup folder/zip name
+	var latestTS int64 = -1 // holds latest backup folder/zip unix timestamp
+
+	for _, entry := range entries {
+		name := entry.Name()
+
+		// Must start with "backup_"
+		if !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		// Strip prefix, and ".zip" suffix
+		backupUnixTime := strings.TrimPrefix(name, prefix)
+		isZip := strings.HasSuffix(backupUnixTime, ".zip")
+		if isZip {
+			backupUnixTime = strings.TrimSuffix(backupUnixTime, ".zip")
+		} else if !entry.IsDir() {
+			// Not a zip and not a directory — skip
+			continue
+		}
+
+		// rest must be a pure unix integer
+		ts, err := strconv.ParseInt(backupUnixTime, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if ts > latestTS {
+			latestTS = ts
+			latestName = name
+		}
+	}
+
+	if latestName == "" {
+		return fmt.Errorf("no valid backup found in %s", backupPath)
+	}
+
+	fullPath := filepath.Join(backupPath, latestName) // full path to the latest backup folder or zip file
+	var wg sync.WaitGroup                             // wait for all goroutines to finish
+	errChan := make(chan error, 1)                    // signal error from goroutines
+	restored := make(chan struct{})                   // signal transCache restored
+
+	// If it's a zip file, open it and read its contents. Otherwise, walk the directory
+	if strings.HasSuffix(latestName, ".zip") {
+		zr, err := zip.OpenReader(fullPath)
+		if err != nil {
+			return fmt.Errorf("failed to open zip %s: %w", fullPath, err)
+		}
+		defer zr.Close()
+
+		// Iterate through each file in the zip and decode its contents into the cache
+		for _, f := range zr.File {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+			chInstanceName := path.Base(path.Dir(f.Name)) // the name of the base folder of the file
+			rc, err := f.Open()
+			if err != nil {
+				return fmt.Errorf("failed to open file %s inside zip: %w", f.Name, err)
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				// Read the entire file into memory, then decode it
+				fileInBytes, err := io.ReadAll(rc)
+				rc.Close()
+				if err != nil {
+					errChan <- fmt.Errorf("failed to read file %s: %w", f.Name, err)
+					return
+				}
+				dec := gob.NewDecoder(bytes.NewReader(fileInBytes))
+				for {
+					var oce OfflineCacheEntity
+					if err := dec.Decode(&oce); err != nil {
+						if err == io.EOF {
+							break
+						}
+						errChan <- fmt.Errorf("failed to decode OfflineCacheEntity at <%s>: %w", f.Name, err)
+						return
+					}
+					if oce.IsSet {
+						tc.cache[chInstanceName].Set(oce.ItemID, oce.Value, oce.GroupIDs)
+					} else {
+						tc.cache[chInstanceName].Remove(oce.ItemID)
+					}
+				}
+			}()
+		}
+	} else {
+		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				r, err := mmap.Open(path)
+				if err != nil {
+					errChan <- fmt.Errorf("error opening file <%s> in memory: %w", path, err)
+					return
+				}
+				defer r.Close()
+				chInstanceName := filepath.Base(filepath.Dir(path)) // the name of the base folder of the file
+				dec := gob.NewDecoder(io.NewSectionReader(r, 0, int64(r.Len())))
+				for {
+					var oce OfflineCacheEntity
+					if err := dec.Decode(&oce); err != nil {
+						if errors.Is(err, io.EOF) {
+							break
+						}
+						errChan <- fmt.Errorf("failed to decode OfflineCacheEntity at <%s>: %w", path, err)
+						return
+					}
+					if oce.IsSet {
+						tc.cache[chInstanceName].Set(oce.ItemID, oce.Value, oce.GroupIDs)
+					} else {
+						tc.cache[chInstanceName].Remove(oce.ItemID)
+					}
+				}
+			}()
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("failed to walk backup dir %s: %w", fullPath, err)
+		}
+	}
+	go func() { // wait in goroutine for restoring to be finished. In cases when an error is returned from reading, instantly return the error and stop proccessing
+		wg.Wait() // wait for all goroutines to finish
+		close(restored)
+	}()
+	select {
+	case err := <-errChan:
+		return err
+	case <-restored:
+		return
+	}
 }

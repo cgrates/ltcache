@@ -9,8 +9,8 @@ package ltcache
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -183,21 +183,19 @@ func readAndDecodeFile(filepath string, handleEntity func(oce *OfflineCacheEntit
 		return fmt.Errorf("error opening file <%s> in memory: %w", filepath, err)
 	}
 	defer r.Close()
-	p := make([]byte, r.Len()) // read into byte slice
-	if _, err = r.ReadAt(p, 0); err != nil {
-		return fmt.Errorf("error reading file <%s> in memory: %w", filepath, err)
-	}
-	dec := gob.NewDecoder(bufio.NewReader(bytes.NewReader(p)))
+
+	// Decode directly from the mmap reader
+	dec := gob.NewDecoder(io.NewSectionReader(r, 0, int64(r.Len())))
 	for {
-		var oce *OfflineCacheEntity
+		var oce OfflineCacheEntity
 		if err := dec.Decode(&oce); err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return fmt.Errorf("failed to decode OfflineCacheEntity at <%s>: %w", filepath, err)
 		}
 		// Call the handler function for each decoded entity
-		handleEntity(oce)
+		handleEntity(&oce)
 	}
 	return nil
 }
@@ -264,8 +262,8 @@ func (coll *OfflineCollector) writeEntity(oce *OfflineCacheEntity) error {
 }
 
 // storeRemoveEntity dumps the removed Cache itemID on file or collects the entity
-func (coll *OfflineCollector) storeRemoveEntity(itemID string, dumpInterval time.Duration) {
-	if dumpInterval == -1 {
+func (coll *OfflineCollector) storeRemoveEntity(itemID string) {
+	if coll.dumpInterval == -1 {
 		if err := coll.writeEntity(&OfflineCacheEntity{ItemID: itemID}); err != nil {
 			coll.logger.Err(err.Error())
 			return

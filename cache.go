@@ -383,7 +383,7 @@ func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Dura
 	cache.offCollector = offColl
 	// populate onEvicted funtion for storing remove entities after setting all items from dump on cache
 	cache.onEvicted = append(cache.onEvicted, func(itemID string, _ any) { // ran when an item is removed from cache
-		cache.offCollector.storeRemoveEntity(itemID, offColl.dumpInterval)
+		cache.offCollector.storeRemoveEntity(itemID)
 	})
 	// populate encoders after reading from files is finished to not needlesly try to read from the new files to be created
 	if cache.offCollector.file, cache.offCollector.writer, cache.offCollector.encoder,

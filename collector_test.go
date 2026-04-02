@@ -363,11 +363,12 @@ func TestOfflineCollectorStoreRemoveEntityNoInterval(t *testing.T) {
 	oc := &OfflineCollector{
 		fileSizeLimit: 1000,
 		file:          tmpFile,
+		dumpInterval:  -1,
 		writer:        bufio.NewWriter(&bytes.Buffer{}),
 		encoder:       gob.NewEncoder(&encBuf),
 	}
 	bufExpect := "OfflineCacheEntity"
-	oc.storeRemoveEntity("CacheID1", -1)
+	oc.storeRemoveEntity("CacheID1")
 	if rcv := encBuf.String(); !strings.Contains(rcv, bufExpect) {
 		t.Errorf("Expected to contain <%+v>, \nReceived <%+v>", bufExpect, rcv)
 	}
@@ -376,11 +377,12 @@ func TestOfflineCollectorStoreRemoveEntityNoInterval(t *testing.T) {
 func TestOfflineCollectorStoreRemoveEntityErr1(t *testing.T) {
 	var logBuf bytes.Buffer
 	oc := &OfflineCollector{
+		dumpInterval:  -1,
 		fileSizeLimit: 1,
 		logger:        &testLogger{log.New(&logBuf, "", 0)},
 	}
 	bufExpect := "error getting file stat: invalid argument"
-	oc.storeRemoveEntity("CacheID1", -1)
+	oc.storeRemoveEntity("CacheID1")
 	if rcv := logBuf.String(); !strings.Contains(rcv, bufExpect) {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", bufExpect, rcv)
 	}
@@ -388,13 +390,14 @@ func TestOfflineCollectorStoreRemoveEntityErr1(t *testing.T) {
 
 func TestOfflineCollectorStoreRemoveEntityInterval(t *testing.T) {
 	oc := &OfflineCollector{
-		collection: map[string]*CollectionEntity{},
+		dumpInterval: 1,
+		collection:   map[string]*CollectionEntity{},
 	}
 	exp := &CollectionEntity{
 		IsSet:  false,
 		ItemID: "CacheID1",
 	}
-	oc.storeRemoveEntity("CacheID1", 1)
+	oc.storeRemoveEntity("CacheID1")
 	if !reflect.DeepEqual(exp, oc.collection["CacheID1"]) {
 		t.Errorf("Expected <%+v>, \nreceived <%+v>", exp, oc.collection["CacheID1"])
 	}
@@ -583,6 +586,46 @@ func BenchmarkEncodeAndDumpSmall(b *testing.B) {
 		err := encodeAndDump(&payload, enc, w)
 		if err != nil {
 			b.Fatalf("error in encodeAndDump: %v", err)
+		}
+	}
+}
+
+func BenchmarkReadAndDecodeFile1(b *testing.B) {
+	file, err := os.CreateTemp("", "benchmark-mmap-*.gob")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+
+	encoder := gob.NewEncoder(file)
+	numEntities := 1000
+	largeData := strings.Repeat("x", 10000) // 10KB per entity
+	for i := range numEntities {
+		oce := OfflineCacheEntity{
+			IsSet:      true,
+			ItemID:     fmt.Sprintf("item%d", i),
+			Value:      largeData,
+			GroupIDs:   []string{"group1"},
+			ExpiryTime: time.Now(),
+		}
+		if err := encoder.Encode(oce); err != nil {
+			b.Fatal(err)
+		}
+	}
+	file.Close()
+
+	b.ResetTimer()
+	for b.Loop() {
+		count := 0
+		err := readAndDecodeFile(file.Name(), func(oce *OfflineCacheEntity) {
+			count++
+		})
+		if err != nil {
+			b.Fatal(err)
+		}
+		if count != numEntities {
+			b.Fatalf("expected %d, got %d", numEntities, count)
 		}
 	}
 }

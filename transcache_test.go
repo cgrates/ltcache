@@ -474,7 +474,8 @@ func TestTranscacheClearWithOfflineCollector(t *testing.T) {
 					"item2": {itemID: "item2"},
 				},
 				offCollector: &OfflineCollector{
-					logger: &testLogger{log.New(&logBuf, "", 0)},
+					dumpInterval: 1,
+					logger:       &testLogger{log.New(&logBuf, "", 0)},
 					collection: map[string]*CollectionEntity{
 						"item1": {IsSet: true, ItemID: "item1"},
 						"item2": {IsSet: true, ItemID: "item2"},
@@ -491,7 +492,8 @@ func TestTranscacheClearWithOfflineCollector(t *testing.T) {
 					"item3": {itemID: "item3"},
 				},
 				offCollector: &OfflineCollector{
-					logger: &testLogger{log.New(&logBuf, "", 0)},
+					dumpInterval: 1,
+					logger:       &testLogger{log.New(&logBuf, "", 0)},
 					collection: map[string]*CollectionEntity{
 						"item1": {IsSet: true, ItemID: "item1"},
 						"item2": {IsSet: true, ItemID: "item2"},
@@ -503,7 +505,7 @@ func TestTranscacheClearWithOfflineCollector(t *testing.T) {
 
 	for i := range tc.cache {
 		tc.cache[i].onEvicted = append(tc.cache[i].onEvicted, func(itemID string, _ any) {
-			tc.cache[i].offCollector.storeRemoveEntity(itemID, 1)
+			tc.cache[i].offCollector.storeRemoveEntity(itemID)
 		})
 	}
 
@@ -514,7 +516,8 @@ func TestTranscacheClearWithOfflineCollector(t *testing.T) {
 				ttlIdx: list.New(),
 				cache:  map[string]*cachedItem{},
 				offCollector: &OfflineCollector{
-					logger: &testLogger{log.New(&logBuf, "", 0)},
+					dumpInterval: 1,
+					logger:       &testLogger{log.New(&logBuf, "", 0)},
 					collection: map[string]*CollectionEntity{
 						"item1": {IsSet: false, ItemID: "item1"},
 						"item2": {IsSet: false, ItemID: "item2"},
@@ -527,7 +530,8 @@ func TestTranscacheClearWithOfflineCollector(t *testing.T) {
 				ttlIdx: list.New(),
 				cache:  map[string]*cachedItem{},
 				offCollector: &OfflineCollector{
-					logger: &testLogger{log.New(&logBuf, "", 0)},
+					dumpInterval: 1,
+					logger:       &testLogger{log.New(&logBuf, "", 0)},
 					collection: map[string]*CollectionEntity{
 						"item1": {IsSet: false, ItemID: "item1"},
 						"item2": {IsSet: false, ItemID: "item2"},
@@ -1906,5 +1910,494 @@ func BenchmarkGet(b *testing.B) {
 	min, max := 0, len(cacheItems)-1 // so we can have random index
 	for n := 0; n < b.N; n++ {
 		tc.Get("aaa_", cacheItems[rand.Intn(max-min)+min][0])
+	}
+}
+
+func TestTransCacheRestoreOK1(t *testing.T) {
+	dumpPath := "/tmp/dump"
+	dumpPath2 := "/tmp/dump2"
+	backupPath := "/tmp/backup"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dumpPath2, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(dumpPath2)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        dumpPath,
+		BackupPath:      backupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", []string{"grp1"}, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2", []string{"grp1", "grp2"}, true, "")
+	tc.Set(DefaultCacheInstance, "item3", "value3", []string{"grp1", "grp2"}, true, "")
+	tc.Remove(DefaultCacheInstance, "item3", true, "")
+
+	if err := tc.BackupDumpFolder(backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+
+	opts.DumpPath = dumpPath2
+	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tc2.Restore(backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if val, ok := tc2.Get(DefaultCacheInstance, "item1"); !ok || val != "value1" {
+		t.Errorf("Expected item1=value1, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item2"); !ok || val != "value2" {
+		t.Errorf("Expected item2=value2, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item3"); ok {
+		t.Errorf("Expected item3 to be removed, but got %v", val)
+	}
+	if grpItems := tc2.GetGroupItems(DefaultCacheInstance, "grp1"); len(grpItems) != 2 {
+		t.Errorf("Expected 2 items in grp1, got %d", len(grpItems))
+	}
+}
+
+func TestTransCacheRestoreOK2(t *testing.T) {
+	dumpPath := "/tmp/dump"
+	backupPath := "/tmp/backup"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        dumpPath,
+		BackupPath:      backupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", []string{"grp1"}, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2", []string{"grp1", "grp2"}, true, "")
+	tc.Set(DefaultCacheInstance, "item3", "value3", []string{"grp1", "grp2"}, true, "")
+	tc.Remove(DefaultCacheInstance, "item3", true, "")
+
+	if err := tc.BackupDumpFolder(backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+
+	tc.Set(DefaultCacheInstance, "item1", "value1_updated", []string{"grp1"}, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2_updated", []string{"grp1", "grp2"}, true, "")
+
+	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tc2.Restore(backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// restore should overwrite the updated values with the backup values
+	if val, ok := tc2.Get(DefaultCacheInstance, "item1"); !ok || val != "value1" {
+		t.Errorf("Expected item1=value1, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item2"); !ok || val != "value2" {
+		t.Errorf("Expected item2=value2, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item3"); ok {
+		t.Errorf("Expected item3 to be removed, but got %v", val)
+	}
+	if grpItems := tc2.GetGroupItems(DefaultCacheInstance, "grp1"); len(grpItems) != 2 {
+		t.Errorf("Expected 2 items in grp1, got %d", len(grpItems))
+	}
+}
+
+func TestTransCacheRestoreZip1(t *testing.T) {
+	dumpPath := "/tmp/restore_dump"
+	backupPath := "/tmp/restore_backup"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:      dumpPath,
+		BackupPath:    backupPath,
+		StartTimeout:  1 * time.Minute,
+		DumpInterval:  -1,
+		FileSizeLimit: 1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", []string{"grp1"}, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2", []string{"grp1", "grp2"}, true, "")
+	tc.Set(DefaultCacheInstance, "item3", "value3", []string{"grp1", "grp2"}, true, "")
+	tc.Remove(DefaultCacheInstance, "item3", true, "")
+
+	if err := tc.BackupDumpFolder(backupPath, true); err != nil {
+		t.Fatal(err)
+	}
+
+	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tc2.Restore(backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if val, ok := tc2.Get(DefaultCacheInstance, "item1"); !ok || val != "value1" {
+		t.Errorf("Expected item1=value1, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item2"); !ok || val != "value2" {
+		t.Errorf("Expected item2=value2, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item3"); ok {
+		t.Errorf("Expected item3 to be removed, but got %v", val)
+	}
+	if grpItems := tc2.GetGroupItems(DefaultCacheInstance, "grp1"); len(grpItems) != 2 {
+		t.Errorf("Expected 2 items in grp1, got %d", len(grpItems))
+	}
+}
+
+func TestTransCacheRestoreZip2(t *testing.T) {
+	dumpPath := "/tmp/restore_dump"
+	dumpPath2 := "/tmp/restore_dump2"
+	backupPath := "/tmp/restore_backup"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dumpPath2, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(dumpPath2)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:      dumpPath,
+		BackupPath:    backupPath,
+		StartTimeout:  1 * time.Minute,
+		DumpInterval:  -1,
+		FileSizeLimit: 1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", []string{"grp1"}, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2", []string{"grp1", "grp2"}, true, "")
+	tc.Set(DefaultCacheInstance, "item3", "value3", []string{"grp1", "grp2"}, true, "")
+	tc.Remove(DefaultCacheInstance, "item3", true, "")
+
+	if err := tc.BackupDumpFolder(backupPath, true); err != nil {
+		t.Fatal(err)
+	}
+
+	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := tc2.Restore(backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if val, ok := tc2.Get(DefaultCacheInstance, "item1"); !ok || val != "value1" {
+		t.Errorf("Expected item1=value1, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item2"); !ok || val != "value2" {
+		t.Errorf("Expected item2=value2, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item3"); ok {
+		t.Errorf("Expected item3 to be removed, but got %v", val)
+	}
+	if grpItems := tc2.GetGroupItems(DefaultCacheInstance, "grp1"); len(grpItems) != 2 {
+		t.Errorf("Expected 2 items in grp1, got %d", len(grpItems))
+	}
+}
+
+func TestTransCacheRestoreNoBackup(t *testing.T) {
+	dumpPath := "/tmp/restore_no_backup"
+	backupPath := "/tmp/restore_no_backup_path"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        dumpPath,
+		BackupPath:      backupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedErr := "no valid backup found in " + backupPath
+	if err := tc.Restore(backupPath); err == nil || err.Error() != expectedErr {
+		t.Errorf("Expected error '%s', got '%v'", expectedErr, err)
+	}
+}
+
+func TestTransCacheRestoreInvalidPath(t *testing.T) {
+	dumpPath := "/tmp/restore_invalid"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dumpPath)
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        dumpPath,
+		BackupPath:      "/nonexistent",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedErrPrefix := "failed to read backup directory:"
+	if err := tc.Restore("/nonexistent/path"); err == nil || !strings.HasPrefix(err.Error(), expectedErrPrefix) {
+		t.Errorf("Expected error starting with '%s', got '%v'", expectedErrPrefix, err)
+	}
+}
+
+func TestTransCacheRestoreEmptyBackupPath(t *testing.T) {
+	dumpPath := "/tmp/restore_empty_path"
+	backupPath := "/tmp/restore_empty_backup"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        dumpPath,
+		BackupPath:      backupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Add some test data
+	tc.Set(DefaultCacheInstance, "item1", "value1", nil, true, "")
+
+	// Backup
+	if err := tc.BackupDumpFolder(backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new TransCache
+	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Restore with empty backupPath (should use from cache)
+	if err := tc2.Restore(""); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify restored data
+	if val, ok := tc2.Get(DefaultCacheInstance, "item1"); !ok || val != "value1" {
+		t.Errorf("Expected item1=value1, got %v, %v", val, ok)
+	}
+}
+
+func TestTransCacheRestoreLatestBackup(t *testing.T) {
+	dumpPath := "/tmp/restore_latest_dump"
+	backupPath := "/tmp/restore_latest_backup"
+	if err := os.MkdirAll(dumpPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(dumpPath)
+		os.RemoveAll(backupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        dumpPath,
+		BackupPath:      backupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1000,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First backup with initial data
+	tc.Set(DefaultCacheInstance, "item1", "value1_v1", nil, true, "")
+	if err := tc.BackupDumpFolder(backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond) // ensure different timestamp
+
+	// Second backup with updated data
+	tc.Set(DefaultCacheInstance, "item1", "value1_v2", nil, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2", nil, true, "")
+	if err := tc.BackupDumpFolder(backupPath, true); err != nil { // mix folder and zip
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// Third backup with more data
+	tc.Set(DefaultCacheInstance, "item3", "value3", nil, true, "")
+	if err := tc.BackupDumpFolder(backupPath, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a new TransCache
+	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
+		&testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Restore should pick the latest backup (third one)
+	if err := tc2.Restore(backupPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify data from the latest backup
+	if val, ok := tc2.Get(DefaultCacheInstance, "item1"); !ok || val != "value1_v2" {
+		t.Errorf("Expected item1=value1_v2, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item2"); !ok || val != "value2" {
+		t.Errorf("Expected item2=value2, got %v, %v", val, ok)
+	}
+	if val, ok := tc2.Get(DefaultCacheInstance, "item3"); !ok || val != "value3" {
+		t.Errorf("Expected item3=value3, got %v, %v", val, ok)
+	}
+}
+
+func BenchmarkRestoreZip(b *testing.B) {
+	tmpDir, err := os.MkdirTemp("", "ltcache_bench")
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tc := &TransCache{
+		cache: map[string]*Cache{
+			DefaultCacheInstance: {
+				offCollector: &OfflineCollector{
+					fldrPath:      filepath.Join(tmpDir, "dump"),
+					fileSizeLimit: 1000000,
+					dumpInterval:  -1,
+					logger:        &testLogger{log.New(&bytes.Buffer{}, "", 0)},
+				},
+			},
+		},
+		cfg: map[string]*CacheConfig{
+			DefaultCacheInstance: {},
+		},
+	}
+
+	largeValue := strings.Repeat("x", 10000) // 10KB per item
+	for i := range 1000 {
+		tc.Set(DefaultCacheInstance, fmt.Sprintf("key%d", i), largeValue, nil, true, "")
+	}
+
+	err = tc.BackupDumpFolder(tmpDir, true)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for b.Loop() {
+		tc2 := &TransCache{
+			cache: map[string]*Cache{
+				DefaultCacheInstance: {},
+			},
+			cfg: map[string]*CacheConfig{
+				DefaultCacheInstance: {},
+			},
+		}
+		err := tc2.Restore(tmpDir)
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }
