@@ -533,11 +533,10 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 			return fmt.Errorf("no valid backup found in %s", backupPath)
 		}
 
-		if err := tc.clearDumpFiles(); err != nil {
-			return err
-		}
-
 		fullPath = filepath.Join(backupPath, latestName) // full path to the latest backup folder or zip file
+	}
+	if err := tc.clearDumpFiles(); err != nil {
+		return err
 	}
 	var wg sync.WaitGroup           // wait for all goroutines to finish
 	errChan := make(chan error, 1)  // signal error from goroutines
@@ -698,6 +697,48 @@ func (tc *TransCache) clearDumpFiles() (err error) {
 	case err := <-errChan:
 		return err
 	case <-cleared:
+		return
+	}
+}
+
+// Snapshot will lock all chache instances, backup the live dump folder taking zip as parameter to zip the backup or not, after which it cleares the live dump folder and creates new dump files out of the live cache entities inside TransCache, and finaly unlock all cache instances
+func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
+	if err := tc.BackupDumpFolder(backupFolderPath, zip); err != nil {
+		return err
+	}
+	if err := tc.clearDumpFiles(); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup           // wait for all goroutines to finish
+	errChan := make(chan error, 1)  // signal error from goroutines
+	finished := make(chan struct{}) // signal snapshot finished
+	for _, chacheInstance := range tc.cache {
+		go func() {
+			chacheInstance.Lock()
+			defer chacheInstance.Unlock()
+			for _, cache := range chacheInstance.cache {
+				if err = chacheInstance.offCollector.writeEntity(&OfflineCacheEntity{
+					IsSet:      true,
+					ItemID:     cache.itemID,
+					Value:      cache.value,
+					ExpiryTime: cache.expiryTime,
+					GroupIDs:   cache.groupIDs,
+				}); err != nil {
+					errChan <- err
+					return
+				}
+			}
+		}()
+	}
+	go func() {
+		wg.Wait() // wait for all goroutines to finish
+		close(finished)
+	}()
+	select {
+	case err := <-errChan:
+		return err
+	case <-finished:
 		return
 	}
 }

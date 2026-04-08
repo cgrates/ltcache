@@ -2353,6 +2353,148 @@ func TestTransCacheRestoreLatestBackup(t *testing.T) {
 	}
 }
 
+func TestTransCacheSnapshotOK(t *testing.T) {
+	path := "/tmp/db_snapshot"
+	if err := os.MkdirAll(path+"/"+DefaultCacheInstance, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bkupPath := "/tmp/backups_snapshot"
+	if err := os.MkdirAll(bkupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(path)
+		os.RemoveAll(bkupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      bkupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", []string{"grp1"}, true, "")
+	tc.Set(DefaultCacheInstance, "item2", "value2", []string{"grp2"}, true, "")
+	time.Sleep(20 * time.Millisecond)
+
+	if err := tc.Snapshot("", false); err != nil {
+		t.Error(err)
+	}
+
+	// Check that backup was created
+	entries, err := os.ReadDir(bkupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Error("No backup created")
+	}
+	foundBackup := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "backup_") && entry.IsDir() {
+			foundBackup = true
+			break
+		}
+	}
+	if !foundBackup {
+		t.Error("Backup folder not found")
+	}
+
+	// Check that dump files exist and contain the items
+	dumpFiles, err := filepath.Glob(filepath.Join(path, DefaultCacheInstance, "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dumpFiles) == 0 {
+		t.Error("No dump files after snapshot")
+	}
+	if val, ok := tc.Get(DefaultCacheInstance, "item1"); !ok || val != "value1" {
+		t.Errorf("Item1 not found after snapshot: %v, %v", val, ok)
+	}
+	if val, ok := tc.Get(DefaultCacheInstance, "item2"); !ok || val != "value2" {
+		t.Errorf("Item2 not found after snapshot: %v, %v", val, ok)
+	}
+}
+
+func TestTransCacheSnapshotZip(t *testing.T) {
+	path := "/tmp/db_snapshot_zip"
+	if err := os.MkdirAll(path+"/"+DefaultCacheInstance, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bkupPath := "/tmp/backups_snapshot_zip"
+	if err := os.MkdirAll(bkupPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		os.RemoveAll(path)
+		os.RemoveAll(bkupPath)
+	}()
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      bkupPath,
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", []string{"grp1"}, true, "")
+	time.Sleep(20 * time.Millisecond)
+	if err := tc.Snapshot("", true); err != nil {
+		t.Error(err)
+	}
+	entries, err := os.ReadDir(bkupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundZip := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "backup_") && strings.HasSuffix(entry.Name(), ".zip") {
+			foundZip = true
+			break
+		}
+	}
+	if !foundZip {
+		t.Error("Zip backup not found")
+	}
+}
+
+func TestTransCacheSnapshotBackupError(t *testing.T) {
+	path := "/tmp/db_snapshot_err"
+	if err := os.MkdirAll(path+"/"+DefaultCacheInstance, 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(path)
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		BackupPath:      "/nonexistent",
+		StartTimeout:    1 * time.Minute,
+		DumpInterval:    -1,
+		RewriteInterval: -1,
+		FileSizeLimit:   1,
+	}
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tc.Set(DefaultCacheInstance, "item1", "value1", nil, true, "")
+	time.Sleep(20 * time.Millisecond)
+	if err := tc.Snapshot("/invalid/path", false); err == nil {
+		t.Error("Expected error for invalid backup path")
+	}
+}
+
 func BenchmarkRestoreZip(b *testing.B) {
 	tmpDir, err := os.MkdirTemp("", "ltcache_bench")
 	if err != nil {
