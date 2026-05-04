@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -57,6 +58,45 @@ func TestOfflineCollectorWriteEntity(t *testing.T) {
 		t.Errorf("expected new writer, received nil")
 	} else if oc.encoder == nil {
 		t.Errorf("expected new encoder, received nil")
+	}
+}
+
+func TestOfflineCollectorWriteEntityUniqueFileNames(t *testing.T) {
+	dir := t.TempDir()
+	oc := &OfflineCollector{
+		fileSizeLimit: 1,
+		fldrPath:      dir,
+		logger:        nopLogger{},
+	}
+	var err error
+	oc.file, oc.writer, oc.encoder, err = populateEncoder(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if err := oc.writeEntity(&OfflineCacheEntity{IsSet: true, ItemID: fmt.Sprintf("item%d", i), Value: i}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) < 2 {
+		t.Fatalf("expected multiple rotated files, got %d", len(entries))
+	}
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if _, ok := seen[entry.Name()]; ok {
+			t.Fatalf("duplicate filename found: %s", entry.Name())
+		}
+		seen[entry.Name()] = struct{}{}
+		if err := readAndDecodeFile(filepath.Join(dir, entry.Name()), func(oce *OfflineCacheEntity) {}); err != nil {
+			t.Fatalf("failed to decode %s: %v", entry.Name(), err)
+		}
 	}
 }
 

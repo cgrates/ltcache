@@ -120,9 +120,9 @@ func (nopLogger) Warning(string) error { return nil }
 // prefix filePrefix, create an encoder and writer for it, and return them
 func populateEncoder(fldrPath string, filePrefix string) (file *os.File,
 	writer *bufio.Writer, encoder *gob.Encoder, err error) {
-	filePath := filepath.Join(fldrPath, filePrefix+
-		strconv.FormatInt(time.Now().UnixMilli(), 10)) // path of the dump file of current caching
-	// instance, in miliseconds in case another dump happens within the second of the dump file created
+	filePath := filepath.Join(fldrPath, fmt.Sprintf("%s%d", filePrefix,
+		time.Now().UnixNano())) // path of the dump file of current caching
+	// instance, in nanoseconds in case another dump happens within the milisecond of the dump file created
 	file, err = os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return nil, nil, nil, err

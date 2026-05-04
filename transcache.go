@@ -651,45 +651,45 @@ func (tc *TransCache) clearCacheAndDumpFiles(clearCache bool) (err error) {
 		if clearCache {
 			cacheInstance.Clear()
 		}
-		cacheInstance.offCollector.collMux.Lock()    // dont clear mid collection dump
-		cacheInstance.offCollector.fileMux.Lock()    // dont clear mid file editing
-		cacheInstance.offCollector.rewriteMux.Lock() // dont clear mid folder rewriting
-		defer func() {
-			cacheInstance.offCollector.collMux.Unlock()
-			cacheInstance.offCollector.fileMux.Unlock()
-			cacheInstance.offCollector.rewriteMux.Unlock()
-		}()
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			cacheInstance.offCollector.collMux.Lock()    // dont clear mid collection dump
+			cacheInstance.offCollector.rewriteMux.Lock() // dont clear mid folder rewriting
+			cacheInstance.offCollector.fileMux.Lock()    // dont clear mid file editing
+			defer func() {
+				cacheInstance.offCollector.collMux.Unlock()
+				cacheInstance.offCollector.rewriteMux.Unlock()
+				cacheInstance.offCollector.fileMux.Unlock()
+				wg.Done()
+			}()
 			cacheInstance.offCollector.collection = make(map[string]*CollectionEntity) // clear collection
-			if err := cacheInstance.offCollector.file.Close(); err != nil {
-				errChan <- err
+			if goErr := cacheInstance.offCollector.file.Close(); goErr != nil {
+				errChan <- goErr
 				return
 			}
 
 			// remove all files from dump folder
-			entries, err := os.ReadDir(cacheInstance.
+			entries, goErr := os.ReadDir(cacheInstance.
 				offCollector.fldrPath)
-			if err != nil {
-				errChan <- err
+			if goErr != nil {
+				errChan <- goErr
 				return
 			}
 			for _, entry := range entries {
 				path := filepath.Join(cacheInstance.
 					offCollector.fldrPath, entry.Name())
-				err := os.RemoveAll(path)
-				if err != nil {
-					errChan <- err
+				goErr := os.RemoveAll(path)
+				if goErr != nil {
+					errChan <- goErr
 					return
 				}
 			}
 
 			// create new live file
 			if cacheInstance.offCollector.file, cacheInstance.offCollector.writer,
-				cacheInstance.offCollector.encoder, err = populateEncoder(cacheInstance.
-				offCollector.fldrPath, ""); err != nil {
-				errChan <- err
+				cacheInstance.offCollector.encoder, goErr = populateEncoder(cacheInstance.
+				offCollector.fldrPath, ""); goErr != nil {
+				errChan <- goErr
 			}
 		}()
 	}
@@ -717,24 +717,28 @@ func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
 	var wg sync.WaitGroup           // wait for all goroutines to finish
 	errChan := make(chan error, 1)  // signal error from goroutines
 	finished := make(chan struct{}) // signal snapshot finished
+	tc.cacheMux.RLock()
 	for _, chacheInstance := range tc.cache {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			chacheInstance.Lock()
 			defer chacheInstance.Unlock()
 			for _, cache := range chacheInstance.cache {
-				if err = chacheInstance.offCollector.writeEntity(&OfflineCacheEntity{
+				if writeErr := chacheInstance.offCollector.writeEntity(&OfflineCacheEntity{
 					IsSet:      true,
 					ItemID:     cache.itemID,
 					Value:      cache.value,
 					ExpiryTime: cache.expiryTime,
 					GroupIDs:   cache.groupIDs,
-				}); err != nil {
-					errChan <- err
+				}); writeErr != nil {
+					errChan <- writeErr
 					return
 				}
 			}
 		}()
 	}
+	tc.cacheMux.RUnlock()
 	go func() {
 		wg.Wait() // wait for all goroutines to finish
 		close(finished)
