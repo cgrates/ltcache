@@ -993,7 +993,7 @@ func TestNewTransCacheWithOfflineCollectorErr3(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	_, err = NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
-	expErr := "failed to decode OfflineCacheEntity at </tmp/internal_db/*default/tmpfile>: unexpected EOF"
+	expErr := "failed to decode CacheEntity at </tmp/internal_db/*default/tmpfile>: unexpected EOF"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
 	} else if rcv := logBuf.String(); !strings.Contains(rcv, "") {
@@ -1125,7 +1125,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 	}
 	writer := bufio.NewWriter(file)
 	encoder := gob.NewEncoder(writer)
-	if err := encodeAndDump(&OfflineCacheEntity{IsSet: true,
+	if err := encodeAndDump(&CacheEntity{IsSet: true,
 		ItemID: "item1", Value: "val1", GroupIDs: []string{"gr1"}}, encoder, writer); err != nil {
 		t.Error(err)
 	}
@@ -1136,7 +1136,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 	}
 	writer = bufio.NewWriter(file)
 	encoder = gob.NewEncoder(writer)
-	if err := encodeAndDump(&OfflineCacheEntity{IsSet: true,
+	if err := encodeAndDump(&CacheEntity{IsSet: true,
 		ItemID: "item2", Value: "val2", GroupIDs: []string{"gr2"}}, encoder, writer); err != nil {
 		t.Error(err)
 	}
@@ -1155,7 +1155,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil)
+	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1174,11 +1174,11 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 		t.Error(err)
 	}
 	dc := gob.NewDecoder(f)
-	var rcv *OfflineCacheEntity
+	var rcv *CacheEntity
 	if err := dc.Decode(&rcv); err != nil {
 		t.Error(err)
 	}
-	exp := []*OfflineCacheEntity{
+	exp := []*CacheEntity{
 		{
 			IsSet:    true,
 			ItemID:   "item1",
@@ -1225,7 +1225,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 	}
 	writer := bufio.NewWriter(file)
 	encoder := gob.NewEncoder(writer)
-	if err := encodeAndDump(&OfflineCacheEntity{IsSet: true,
+	if err := encodeAndDump(&CacheEntity{IsSet: true,
 		ItemID: "item1", Value: "val1", GroupIDs: []string{"gr1"}}, encoder, writer); err != nil {
 		t.Error(err)
 	}
@@ -1236,7 +1236,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 	}
 	writer = bufio.NewWriter(file)
 	encoder = gob.NewEncoder(writer)
-	if err := encodeAndDump(&OfflineCacheEntity{IsSet: false,
+	if err := encodeAndDump(&CacheEntity{IsSet: false,
 		ItemID: "item1"}, encoder, writer); err != nil {
 		t.Error(err)
 	}
@@ -1255,7 +1255,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil)
+	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1312,7 +1312,7 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 	}
 	writer := bufio.NewWriter(file)
 	encoder := gob.NewEncoder(writer)
-	if err := encodeAndDump(&OfflineCacheEntity{IsSet: true,
+	if err := encodeAndDump(&CacheEntity{IsSet: true,
 		ItemID: "item1", Value: "val1", GroupIDs: []string{"gr1"}}, encoder, writer); err != nil {
 		t.Error(err)
 	}
@@ -1323,7 +1323,7 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 	}
 	writer = bufio.NewWriter(file)
 	encoder = gob.NewEncoder(writer)
-	if err := encodeAndDump(&OfflineCacheEntity{IsSet: false,
+	if err := encodeAndDump(&CacheEntity{IsSet: false,
 		ItemID: "item1"}, encoder, writer); err != nil {
 		t.Error(err)
 	}
@@ -1343,7 +1343,7 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil)
+	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -2493,6 +2493,106 @@ func TestTransCacheSnapshotBackupError(t *testing.T) {
 	if err := tc.Snapshot("/invalid/path", false); err == nil {
 		t.Error("Expected error for invalid backup path")
 	}
+}
+
+func TestGetInternalReplicationChannels(t *testing.T) {
+
+	tc := NewTransCache(map[string]*CacheConfig{
+		"t11_": {
+			MaxItems:  -1,
+			Replicate: make(chan *CacheEntity),
+		},
+	})
+	intChans := tc.GetInternalReplicationChannels()
+
+	var wg sync.WaitGroup
+	for _, chans := range intChans {
+		wg.Add(1)
+		go func() {
+			rcv := <-chans
+			exp := &CacheEntity{
+				IsSet:  true,
+				ItemID: "mm",
+				Value:  "test",
+			}
+			if !reflect.DeepEqual(exp, rcv) {
+				t.Errorf("expected <%v>, received <%v>", exp, rcv)
+			}
+			wg.Done()
+		}()
+	}
+	tc.Set("t11_", "mm", "test", nil, true, "")
+
+	if t1, ok := tc.Get("t11_", "mm"); !ok || t1 != "test" {
+		t.Error("Error setting cache: ", ok, t1)
+	}
+	wg.Wait()
+
+	intChans = tc.GetInternalReplicationChannels()
+
+	for _, chans := range intChans {
+		wg.Add(1)
+		go func() {
+			rcv := <-chans
+			exp := &CacheEntity{
+				IsSet:  true,
+				ItemID: "mm2",
+				Value:  "test2",
+			}
+
+			if !reflect.DeepEqual(exp, rcv) {
+				t.Errorf("expected <%v>, received <%v>", exp, rcv)
+			}
+			wg.Done()
+		}()
+		wg.Add(1)
+		go func() {
+			rcv := <-chans
+			exp := &CacheEntity{
+				IsSet:  false,
+				ItemID: "mm",
+			}
+			if !reflect.DeepEqual(exp, rcv) {
+				t.Errorf("expected <%v>, received <%v>", exp, rcv)
+			}
+			wg.Done()
+		}()
+	}
+	tc.Remove("t11_", "mm", true, "")
+	tc.Set("t11_", "mm2", "test2", nil, true, "")
+	wg.Wait()
+
+}
+
+func TestReplicateEntity(t *testing.T) {
+
+	tc := NewTransCache(map[string]*CacheConfig{})
+
+	tc.Set("t11_", "mm", "test", nil, true, "")
+
+	if t1, ok := tc.Get("t11_", "mm"); !ok || t1 != "test" {
+		t.Error("Error setting cache: ", ok, t1)
+	}
+
+	tc.ReplicateEntity("t11_", &CacheEntity{
+		IsSet:  true,
+		ItemID: "mm2",
+		Value:  "test2",
+	})
+
+	if t1, ok := tc.Get("t11_", "mm2"); !ok || t1 != "test2" {
+		t.Error("Error setting cache: ", ok, t1)
+	}
+
+	tc.ReplicateEntity("t11_", &CacheEntity{
+		IsSet:  false,
+		ItemID: "mm",
+	})
+
+	if t1, ok := tc.Get("t11_", "mm"); ok {
+		t.Error("Error removing cache: ", t1)
+	}
+
 }
 
 func BenchmarkRestoreZip(b *testing.B) {
