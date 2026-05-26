@@ -45,6 +45,8 @@ type Cache struct {
 	groups map[string]map[string]struct{} // map[groupID]map[itemKey]struct{}
 	// onEvicted will execute specific function if defined when an item will be removed
 	onEvicted []func(itmID string, value any)
+	// channel used to pass CacheEntities set or removed to another cache instance for replication
+	replicate chan *CacheEntity
 	// maxEntries represents maximum number of entries allowed by LRU cache mechanism
 	// -1 for unlimited caching, 0 for disabling caching
 	maxEntries int
@@ -64,7 +66,7 @@ type Cache struct {
 
 // NewCache initializes a new cache.
 func NewCache(maxEntries int, ttl time.Duration, staticTTL, clone bool,
-	onEvicted []func(itmID string, value any)) (c *Cache) {
+	onEvicted []func(itmID string, value any), replicate chan *CacheEntity) (c *Cache) {
 	c = &Cache{
 		cache:      make(map[string]*cachedItem),
 		groups:     make(map[string]map[string]struct{}),
@@ -76,8 +78,17 @@ func NewCache(maxEntries int, ttl time.Duration, staticTTL, clone bool,
 		ttlIdx:     list.New(),
 		ttlRefs:    make(map[string]*list.Element),
 		clone:      clone,
+		replicate:  replicate,
 	}
 	c.onEvicted = append(c.onEvicted, onEvicted...)
+	if replicate != nil {
+		c.onEvicted = append(c.onEvicted, func(itemID string, _ any) { // ran when an item is removed from cache
+			c.replicate <- &CacheEntity{
+				IsSet:  false,
+				ItemID: itemID,
+			}
+		})
+	}
 	if c.ttl > 0 {
 		go c.cleanExpired()
 	}
@@ -137,13 +148,22 @@ func (c *Cache) Set(itmID string, value any, grpIDs []string) {
 	}
 	c.Lock()
 	defer func() {
+		if c.replicate != nil { // send item ready for replication channel
+			c.replicate <- &CacheEntity{
+				IsSet:      true,
+				ItemID:     itmID,
+				Value:      c.cache[itmID].value,
+				ExpiryTime: c.cache[itmID].expiryTime,
+				GroupIDs:   c.cache[itmID].groupIDs,
+			}
+		}
 		if c.offCollector != nil {
 			if c.offCollector.collectSetEntity { // if collectSet is true collect the itemID to write in dump later in the interval
 				c.offCollector.collect(itmID)
 			} else { // if not write the item in dump instantly
 				c.offCollector.collMux.Lock()
 				defer c.offCollector.collMux.Unlock()
-				if err := c.offCollector.writeEntity(&OfflineCacheEntity{
+				if err := c.offCollector.writeEntity(&CacheEntity{
 					IsSet:      true,
 					ItemID:     itmID,
 					Value:      c.cache[itmID].value,
@@ -356,7 +376,7 @@ func (c *Cache) GetCacheStats() (cs *CacheStats) {
 }
 
 // NewCacheFromFolder construct a new Cache from reading dump files
-func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Duration, staticTTL, clone bool, onEvicted []func(itmID string, value any)) (cache *Cache, err error) {
+func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Duration, staticTTL, clone bool, onEvicted []func(itmID string, value any), replicate chan *CacheEntity) (cache *Cache, err error) {
 	filePaths, err := getFilePaths(offColl.fldrPath)
 	if err != nil {
 		return nil, fmt.Errorf("error walking the path: %w", err)
@@ -365,9 +385,9 @@ func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Dura
 	if err != nil {
 		return
 	}
-	cache = NewCache(maxEntries, ttl, staticTTL, clone, onEvicted)
+	cache = NewCache(maxEntries, ttl, staticTTL, clone, onEvicted, replicate)
 
-	handleEntity := func(oce *OfflineCacheEntity) { // set or remove read item from cache
+	handleEntity := func(oce *CacheEntity) { // set or remove read item from cache
 		if oce.IsSet {
 			cache.Set(oce.ItemID, oce.Value, oce.GroupIDs)
 		} else {
@@ -463,7 +483,7 @@ func (c *Cache) DumpToFile() (err error) {
 	}()
 	for itemID, collEntity := range c.offCollector.collection {
 		if collEntity.IsSet { // Write SET entity to dump file
-			if err = c.offCollector.writeEntity(&OfflineCacheEntity{
+			if err = c.offCollector.writeEntity(&CacheEntity{
 				IsSet:      true,
 				ItemID:     itemID,
 				Value:      c.cache[itemID].value,
@@ -473,7 +493,7 @@ func (c *Cache) DumpToFile() (err error) {
 				return
 			}
 		} else { // write REMOVE entity to dump file
-			if err = c.offCollector.writeEntity(&OfflineCacheEntity{
+			if err = c.offCollector.writeEntity(&CacheEntity{
 				IsSet:  false,
 				ItemID: itemID,
 			}); err != nil {

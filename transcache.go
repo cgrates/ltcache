@@ -65,8 +65,9 @@ type CacheConfig struct {
 	MaxItems  int
 	TTL       time.Duration
 	StaticTTL bool
-	OnEvicted []func(itmID string, value interface{})
+	OnEvicted []func(itmID string, value any)
 	Clone     bool
+	Replicate chan *CacheEntity
 }
 
 // NewTransCache instantiates a new TransCache
@@ -80,7 +81,7 @@ func NewTransCache(cfg map[string]*CacheConfig) (tc *TransCache) {
 		transactionBuffer: make(map[string][]*transactionItem),
 	}
 	for cacheID, chCfg := range cfg {
-		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.Clone, chCfg.OnEvicted)
+		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.Clone, chCfg.OnEvicted, chCfg.Replicate)
 	}
 	return
 }
@@ -324,7 +325,7 @@ func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*Cac
 		go func() {
 			defer wg.Done()
 			offColl := NewOfflineCollector(cacheName, opts, l)
-			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.Clone, config.OnEvicted)
+			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.Clone, config.OnEvicted, config.Replicate)
 			if err != nil {
 				errChan <- err
 				return
@@ -572,12 +573,12 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 				}
 				dec := gob.NewDecoder(bytes.NewReader(fileInBytes))
 				for {
-					var oce OfflineCacheEntity
+					var oce CacheEntity
 					if err := dec.Decode(&oce); err != nil {
 						if err == io.EOF {
 							break
 						}
-						errChan <- fmt.Errorf("failed to decode OfflineCacheEntity at <%s>: %w", f.Name, err)
+						errChan <- fmt.Errorf("failed to decode CacheEntity at <%s>: %w", f.Name, err)
 						return
 					}
 					if oce.IsSet {
@@ -608,12 +609,12 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 				chInstanceName := filepath.Base(filepath.Dir(path)) // the name of the base folder of the file
 				dec := gob.NewDecoder(io.NewSectionReader(r, 0, int64(r.Len())))
 				for {
-					var oce OfflineCacheEntity
+					var oce CacheEntity
 					if err := dec.Decode(&oce); err != nil {
 						if errors.Is(err, io.EOF) {
 							break
 						}
-						errChan <- fmt.Errorf("failed to decode OfflineCacheEntity at <%s>: %w", path, err)
+						errChan <- fmt.Errorf("failed to decode CacheEntity at <%s>: %w", path, err)
 						return
 					}
 					if oce.IsSet {
@@ -725,7 +726,7 @@ func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
 			chacheInstance.Lock()
 			defer chacheInstance.Unlock()
 			for _, cache := range chacheInstance.cache {
-				if writeErr := chacheInstance.offCollector.writeEntity(&OfflineCacheEntity{
+				if writeErr := chacheInstance.offCollector.writeEntity(&CacheEntity{
 					IsSet:      true,
 					ItemID:     cache.itemID,
 					Value:      cache.value,
@@ -749,4 +750,26 @@ func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
 	case <-finished:
 		return
 	}
+}
+
+// GetInternalReplicationChannels will return all channels containing cache items ready for replication
+func (tc *TransCache) GetInternalReplicationChannels() (cacheChannels map[string]chan *CacheEntity) {
+	cacheChannels = make(map[string]chan *CacheEntity)
+	tc.cacheMux.RLock()
+	for chKey, c := range tc.cache {
+		if c.replicate != nil {
+			cacheChannels[chKey] = c.replicate
+		}
+	}
+	tc.cacheMux.RUnlock()
+	return
+}
+
+// ReplicateEntity will replicate a CacheEntity by either setting it or removing it from cache depending on cacheEntity.IsSet
+func (tc *TransCache) ReplicateEntity(instance string, cacheEntity *CacheEntity) {
+	if cacheEntity.IsSet {
+		tc.cacheInstance(instance).Set(cacheEntity.ItemID, cacheEntity.Value, cacheEntity.GroupIDs)
+		return
+	}
+	tc.cacheInstance(instance).Remove(cacheEntity.ItemID)
 }

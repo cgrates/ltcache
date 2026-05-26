@@ -83,8 +83,8 @@ type CollectionEntity struct {
 	ItemID string // Holds the cache ItemID
 }
 
-// OfflineCacheEntity is used as the structure to be encoded/decoded per cache item to be dumped to file
-type OfflineCacheEntity struct {
+// CacheEntity is used as the structure to be encoded/decoded per cache item to be dumped to file
+type CacheEntity struct {
 	IsSet      bool      // Controls if the item that is written is a SET or a REMOVE of the item
 	ItemID     string    // Holds the cache ItemID to be stored in file
 	Value      any       // Value of cache item to be stored in file
@@ -176,8 +176,8 @@ func getFilePaths(dir string) ([]string, error) {
 	return filePaths, err
 }
 
-// readAndDecodeFile reads dump file and decodes into OfflineCacheEntity to be used by handleEntity function
-func readAndDecodeFile(filepath string, handleEntity func(oce *OfflineCacheEntity)) error {
+// readAndDecodeFile reads dump file and decodes into CacheEntity to be used by handleEntity function
+func readAndDecodeFile(filepath string, handleEntity func(oce *CacheEntity)) error {
 	r, err := mmap.Open(filepath) // open mmap reader
 	if err != nil {
 		return fmt.Errorf("error opening file <%s> in memory: %w", filepath, err)
@@ -187,12 +187,12 @@ func readAndDecodeFile(filepath string, handleEntity func(oce *OfflineCacheEntit
 	// Decode directly from the mmap reader
 	dec := gob.NewDecoder(io.NewSectionReader(r, 0, int64(r.Len())))
 	for {
-		var oce OfflineCacheEntity
+		var oce CacheEntity
 		if err := dec.Decode(&oce); err != nil {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return fmt.Errorf("failed to decode OfflineCacheEntity at <%s>: %w", filepath, err)
+			return fmt.Errorf("failed to decode CacheEntity at <%s>: %w", filepath, err)
 		}
 		// Call the handler function for each decoded entity
 		handleEntity(&oce)
@@ -210,8 +210,8 @@ func (coll *OfflineCollector) collect(itemID string) {
 	coll.collMux.Unlock()
 }
 
-// encodeAndDump OfflineCacheEntity to file
-func encodeAndDump(oce *OfflineCacheEntity, enc *gob.Encoder, w *bufio.Writer) (err error) {
+// encodeAndDump CacheEntity to file
+func encodeAndDump(oce *CacheEntity, enc *gob.Encoder, w *bufio.Writer) (err error) {
 	if err = enc.Encode(oce); err != nil {
 		return fmt.Errorf("encode error: <%w>", err)
 	}
@@ -244,7 +244,7 @@ func rotateFileIfNeeded(fldrPath string, fileSizeLimit int64, file *os.File) (ne
 }
 
 // writeEntity writes SET or REMOVE entity on dump file
-func (coll *OfflineCollector) writeEntity(oce *OfflineCacheEntity) error {
+func (coll *OfflineCollector) writeEntity(oce *CacheEntity) error {
 	coll.fileMux.Lock()
 	defer coll.fileMux.Unlock()
 	var err error
@@ -264,7 +264,7 @@ func (coll *OfflineCollector) writeEntity(oce *OfflineCacheEntity) error {
 // storeRemoveEntity dumps the removed Cache itemID on file or collects the entity
 func (coll *OfflineCollector) storeRemoveEntity(itemID string) {
 	if coll.dumpInterval == -1 {
-		if err := coll.writeEntity(&OfflineCacheEntity{ItemID: itemID}); err != nil {
+		if err := coll.writeEntity(&CacheEntity{ItemID: itemID}); err != nil {
 			coll.logger.Err(err.Error())
 			return
 		}
@@ -320,7 +320,7 @@ func (coll *OfflineCollector) rewriteFiles() (err error) {
 			tmpFilePaths = append(tmpFilePaths, newFile.Name())
 		}
 		if err := encodeAndDump(oce, enc, writer); err != nil {
-			coll.logger.Warning(fmt.Sprintf("Rewrite failed. OfflineCacheEntity <%#v> \nError <%v>", oce, err))
+			coll.logger.Warning(fmt.Sprintf("Rewrite failed. CacheEntity <%#v> \nError <%v>", oce, err))
 			return err
 		}
 	}
@@ -358,7 +358,7 @@ func (coll *OfflineCollector) rewriteFiles() (err error) {
 // paths to each file inside it, excluding current opened dump file. Returns also the streamlined cache
 // dump it read from all the files gathered
 func (coll *OfflineCollector) getFilePathsAndOfflineEntities() (filePaths []string,
-	oceMap map[string]*OfflineCacheEntity, skip bool, err error) {
+	oceMap map[string]*CacheEntity, skip bool, err error) {
 	coll.fileMux.RLock() // make sure current opened dump file isnt switched while cache
 	//  dump folder is being read
 	currentDumpFilePath := coll.file.Name() // save path of file which is currently being
@@ -382,8 +382,8 @@ func (coll *OfflineCollector) getFilePathsAndOfflineEntities() (filePaths []stri
 	if shouldSkipRewrite(filePaths, coll.fldrPath) {
 		return nil, nil, true, nil
 	}
-	oceMap = make(map[string]*OfflineCacheEntity)   // momentarily hold only necessary entities of all files of cache dump. Needed so we don’t write something which will be removed on the next coming files.
-	handleEntity := func(oce *OfflineCacheEntity) { // will add/delete OfflineCacheEntity from oceMap
+	oceMap = make(map[string]*CacheEntity)   // momentarily hold only necessary entities of all files of cache dump. Needed so we don’t write something which will be removed on the next coming files.
+	handleEntity := func(oce *CacheEntity) { // will add/delete CacheEntity from oceMap
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {

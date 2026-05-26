@@ -50,7 +50,7 @@ func TestOfflineCollectorWriteEntity(t *testing.T) {
 		fldrPath:      path + "/*default",
 		file:          tmpFile,
 	}
-	if err := oc.writeEntity(&OfflineCacheEntity{}); err != nil {
+	if err := oc.writeEntity(&CacheEntity{}); err != nil {
 		t.Error(err)
 	} else if !strings.HasPrefix(oc.file.Name(), "/tmp/internal_db/*default/"+tmpRewriteName) {
 		t.Errorf("expected new file, received <%v>", oc.file.Name())
@@ -74,7 +74,7 @@ func TestOfflineCollectorWriteEntityUniqueFileNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 10; i++ {
-		if err := oc.writeEntity(&OfflineCacheEntity{IsSet: true, ItemID: fmt.Sprintf("item%d", i), Value: i}); err != nil {
+		if err := oc.writeEntity(&CacheEntity{IsSet: true, ItemID: fmt.Sprintf("item%d", i), Value: i}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -94,7 +94,7 @@ func TestOfflineCollectorWriteEntityUniqueFileNames(t *testing.T) {
 			t.Fatalf("duplicate filename found: %s", entry.Name())
 		}
 		seen[entry.Name()] = struct{}{}
-		if err := readAndDecodeFile(filepath.Join(dir, entry.Name()), func(oce *OfflineCacheEntity) {}); err != nil {
+		if err := readAndDecodeFile(filepath.Join(dir, entry.Name()), func(oce *CacheEntity) {}); err != nil {
 			t.Fatalf("failed to decode %s: %v", entry.Name(), err)
 		}
 	}
@@ -163,22 +163,22 @@ func TestReadAndDecodeFileDecodeSet(t *testing.T) {
 	} else {
 		defer f.Close()
 		enc := gob.NewEncoder(f)
-		enc.Encode(OfflineCacheEntity{
+		enc.Encode(CacheEntity{
 			IsSet:    true,
 			ItemID:   "testID",
 			Value:    "value",
 			GroupIDs: []string{"gpID"},
 		})
 	}
-	oceMap := map[string]*OfflineCacheEntity{}
-	handleEntity := func(oce *OfflineCacheEntity) { // will add/delete OfflineCacheEntity from oceMap
+	oceMap := map[string]*CacheEntity{}
+	handleEntity := func(oce *CacheEntity) { // will add/delete CacheEntity from oceMap
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
 			delete(oceMap, oce.ItemID)
 		}
 	}
-	exp := map[string]*OfflineCacheEntity{
+	exp := map[string]*CacheEntity{
 		"testID": {IsSet: true, ItemID: "testID", Value: "value",
 			GroupIDs: []string{"gpID"}},
 	}
@@ -202,14 +202,14 @@ func TestReadAndDecodeFileDecodeRemove(t *testing.T) {
 	} else {
 		defer f.Close()
 		enc := gob.NewEncoder(f)
-		enc.Encode(OfflineCacheEntity{
+		enc.Encode(CacheEntity{
 			IsSet:    false,
 			ItemID:   "testID",
 			Value:    "value",
 			GroupIDs: []string{"gpID"},
 		})
 	}
-	oceMap := map[string]*OfflineCacheEntity{
+	oceMap := map[string]*CacheEntity{
 		"testID": {
 			IsSet:    false,
 			ItemID:   "testID",
@@ -217,14 +217,14 @@ func TestReadAndDecodeFileDecodeRemove(t *testing.T) {
 			GroupIDs: []string{"gpID"},
 		},
 	}
-	handleEntity := func(oce *OfflineCacheEntity) { // will add/delete OfflineCacheEntity from oceMap
+	handleEntity := func(oce *CacheEntity) { // will add/delete CacheEntity from oceMap
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
 			delete(oceMap, oce.ItemID)
 		}
 	}
-	exp := map[string]*OfflineCacheEntity{}
+	exp := map[string]*CacheEntity{}
 	if err := readAndDecodeFile(path+"/file", handleEntity); err != nil {
 		t.Error(err)
 	}
@@ -235,8 +235,8 @@ func TestReadAndDecodeFileDecodeRemove(t *testing.T) {
 
 func TestReadAndDecodeFileErr1(t *testing.T) {
 	expErr := "error opening file <> in memory: open : no such file or directory"
-	oceMap := map[string]*OfflineCacheEntity{}
-	handleEntity := func(oce *OfflineCacheEntity) {
+	oceMap := map[string]*CacheEntity{}
+	handleEntity := func(oce *CacheEntity) {
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
@@ -407,7 +407,7 @@ func TestOfflineCollectorStoreRemoveEntityNoInterval(t *testing.T) {
 		writer:        bufio.NewWriter(&bytes.Buffer{}),
 		encoder:       gob.NewEncoder(&encBuf),
 	}
-	bufExpect := "OfflineCacheEntity"
+	bufExpect := "CacheEntity"
 	oc.storeRemoveEntity("CacheID1")
 	if rcv := encBuf.String(); !strings.Contains(rcv, bufExpect) {
 		t.Errorf("Expected to contain <%+v>, \nReceived <%+v>", bufExpect, rcv)
@@ -497,7 +497,7 @@ func BenchmarkEncodeAndDumpVeryLarge(b *testing.B) {
 		metadata[fmt.Sprintf("key-%d", i)] = fmt.Sprintf("value-%d", i)
 	}
 
-	payload := &OfflineCacheEntity{
+	payload := &CacheEntity{
 		IsSet:  true,
 		ItemID: "very-large-id",
 		Value: &VeryLargeStruct{
@@ -540,7 +540,7 @@ func BenchmarkEncodeAndDumpLarge(b *testing.B) {
 		metadata[fmt.Sprintf("key-%d", i)] = fmt.Sprintf("value-%d", i)
 	}
 
-	payload := &OfflineCacheEntity{
+	payload := &CacheEntity{
 		IsSet:  true,
 		ItemID: "large-id",
 		Value: &LargeStruct{
@@ -580,7 +580,7 @@ func BenchmarkEncodeAndDumpMedium(b *testing.B) {
 		metadata[fmt.Sprintf("key-%d", i)] = fmt.Sprintf("value-%d", i)
 	}
 
-	payload := &OfflineCacheEntity{
+	payload := &CacheEntity{
 		IsSet:  true,
 		ItemID: "medium-id",
 		Value: &MediumStruct{
@@ -611,7 +611,7 @@ func BenchmarkEncodeAndDumpSmall(b *testing.B) {
 	}
 	gob.Register(new(SmallStruct))
 
-	payload := OfflineCacheEntity{
+	payload := CacheEntity{
 		IsSet:      true,
 		ItemID:     "small-id",
 		Value:      &SmallStruct{Name: "Test", Value: 42},
@@ -642,7 +642,7 @@ func BenchmarkReadAndDecodeFile1(b *testing.B) {
 	numEntities := 1000
 	largeData := strings.Repeat("x", 10000) // 10KB per entity
 	for i := range numEntities {
-		oce := OfflineCacheEntity{
+		oce := CacheEntity{
 			IsSet:      true,
 			ItemID:     fmt.Sprintf("item%d", i),
 			Value:      largeData,
@@ -658,7 +658,7 @@ func BenchmarkReadAndDecodeFile1(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		count := 0
-		err := readAndDecodeFile(file.Name(), func(oce *OfflineCacheEntity) {
+		err := readAndDecodeFile(file.Name(), func(oce *CacheEntity) {
 			count++
 		})
 		if err != nil {
