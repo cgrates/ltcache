@@ -54,11 +54,11 @@ type CacheCloner interface {
 }
 
 type transactionItem struct {
-	verb     string      // action which will be executed on cache
-	cacheID  string      // cache instance identifier
-	itemID   string      // item itentifier
-	value    interface{} // item value
-	groupIDs []string    // attach item to groups
+	verb     string   // action which will be executed on cache
+	cacheID  string   // cache instance identifier
+	itemID   string   // item itentifier
+	value    any      // item value
+	groupIDs []string // attach item to groups
 }
 
 type CacheConfig struct {
@@ -71,7 +71,7 @@ type CacheConfig struct {
 }
 
 // NewTransCache instantiates a new TransCache
-func NewTransCache(cfg map[string]*CacheConfig) (tc *TransCache) {
+func NewTransCache(cfg map[string]*CacheConfig, transactional bool) (tc *TransCache) {
 	if _, has := cfg[DefaultCacheInstance]; !has { // Default always created
 		cfg[DefaultCacheInstance] = &CacheConfig{MaxItems: -1}
 	}
@@ -79,6 +79,7 @@ func NewTransCache(cfg map[string]*CacheConfig) (tc *TransCache) {
 		cache:             make(map[string]*Cache),
 		cfg:               cfg,
 		transactionBuffer: make(map[string][]*transactionItem),
+		transactional:     transactional,
 	}
 	for cacheID, chCfg := range cfg {
 		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.Clone, chCfg.OnEvicted, chCfg.Replicate)
@@ -92,6 +93,7 @@ type TransCache struct {
 	cfg      map[string]*CacheConfig // map[cacheInstance]*CacheConfig
 	cacheMux sync.RWMutex            // so we can apply the complete transaction buffer in one shoot
 
+	transactional     bool                          // controls whether the transaction subsystem is used.
 	transactionBuffer map[string][]*transactionItem // Queue tasks based on transactionID
 	transBufMux       sync.Mutex                    // Protects the transactionBuffer
 	transactionMux    sync.Mutex                    // Queue transactions on commit
@@ -99,15 +101,18 @@ type TransCache struct {
 
 // cacheInstance returns a specific cache instance based on ID or default
 func (tc *TransCache) cacheInstance(chID string) (c *Cache) {
-	var ok bool
-	if c, ok = tc.cache[chID]; !ok {
-		c = tc.cache[DefaultCacheInstance]
+	if c, ok := tc.cache[chID]; ok {
+		return c
 	}
-	return
+	return tc.cache[DefaultCacheInstance]
 }
 
 // BeginTransaction initializes a new transaction into transactions buffer
 func (tc *TransCache) BeginTransaction() (transID string) {
+	if !tc.transactional {
+		// Transactions disabled: return empty id and don't create buffer
+		return ""
+	}
 	transID = GenUUID()
 	tc.transBufMux.Lock()
 	tc.transactionBuffer[transID] = make([]*transactionItem, 0)
@@ -117,6 +122,9 @@ func (tc *TransCache) BeginTransaction() (transID string) {
 
 // RollbackTransaction destroys a transaction from transactions buffer
 func (tc *TransCache) RollbackTransaction(transID string) {
+	if !tc.transactional {
+		return
+	}
 	tc.transBufMux.Lock()
 	delete(tc.transactionBuffer, transID)
 	tc.transBufMux.Unlock()
@@ -124,6 +132,9 @@ func (tc *TransCache) RollbackTransaction(transID string) {
 
 // CommitTransaction executes the actions in a transaction buffer
 func (tc *TransCache) CommitTransaction(transID string) {
+	if !tc.transactional {
+		return
+	}
 	tc.transactionMux.Lock()
 	tc.transBufMux.Lock()
 	tc.cacheMux.Lock() // apply all transactioned items in one shot
@@ -146,17 +157,19 @@ func (tc *TransCache) CommitTransaction(transID string) {
 }
 
 // Get returns the value of an Item
-func (tc *TransCache) Get(chID, itmID string) (interface{}, bool) {
-	tc.cacheMux.RLock()
-	defer tc.cacheMux.RUnlock()
+func (tc *TransCache) Get(chID, itmID string) (any, bool) {
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
 	return tc.cacheInstance(chID).Get(itmID)
 }
 
 // Set will add/edit an item to the cache
-func (tc *TransCache) Set(chID, itmID string, value interface{},
+func (tc *TransCache) Set(chID, itmID string, value any,
 	groupIDs []string, commit bool, transID string) {
 	if commit {
-		if transID == "" { // Lock locally
+		if tc.transactional && transID == "" { // Lock locally
 			tc.cacheMux.Lock()
 			defer tc.cacheMux.Unlock()
 		}
@@ -174,7 +187,7 @@ func (tc *TransCache) Set(chID, itmID string, value interface{},
 // Remove removes an item from the cache
 func (tc *TransCache) Remove(chID, itmID string, commit bool, transID string) {
 	if commit {
-		if transID == "" { // Lock per operation not transaction
+		if tc.transactional && transID == "" { // Lock per operation not transaction
 			tc.cacheMux.Lock()
 			defer tc.cacheMux.Unlock()
 		}
@@ -188,32 +201,35 @@ func (tc *TransCache) Remove(chID, itmID string, commit bool, transID string) {
 }
 
 func (tc *TransCache) HasGroup(chID, grpID string) (has bool) {
-	tc.cacheMux.RLock()
-	has = tc.cacheInstance(chID).HasGroup(grpID)
-	tc.cacheMux.RUnlock()
-	return
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
+	return tc.cacheInstance(chID).HasGroup(grpID)
 }
 
 // GetGroupItems returns all items in a group. Nil if group does not exist
 func (tc *TransCache) GetGroupItemIDs(chID, grpID string) (itmIDs []string) {
-	tc.cacheMux.RLock()
-	itmIDs = tc.cacheInstance(chID).GetGroupItemIDs(grpID)
-	tc.cacheMux.RUnlock()
-	return
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
+	return tc.cacheInstance(chID).GetGroupItemIDs(grpID)
 }
 
 // GetGroupItems returns all items in a group. Nil if group does not exist
-func (tc *TransCache) GetGroupItems(chID, grpID string) (itms []interface{}) {
-	tc.cacheMux.RLock()
-	itms = tc.cacheInstance(chID).GetGroupItems(grpID)
-	tc.cacheMux.RUnlock()
-	return
+func (tc *TransCache) GetGroupItems(chID, grpID string) (itms []any) {
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
+	return tc.cacheInstance(chID).GetGroupItems(grpID)
 }
 
 // RemoveGroup removes a group of items out of cache
 func (tc *TransCache) RemoveGroup(chID, grpID string, commit bool, transID string) {
 	if commit {
-		if transID == "" { // Lock locally
+		if tc.transactional && transID == "" { // Lock locally
 			tc.cacheMux.Lock()
 			defer tc.cacheMux.Unlock()
 		}
@@ -228,7 +244,10 @@ func (tc *TransCache) RemoveGroup(chID, grpID string, commit bool, transID strin
 
 // Remove all items in one or more cache instances
 func (tc *TransCache) Clear(chIDs []string) {
-	tc.cacheMux.Lock()
+	if tc.transactional {
+		tc.cacheMux.Lock()
+		defer tc.cacheMux.Unlock()
+	}
 	if chIDs == nil {
 		chIDs = make([]string, len(tc.cache))
 		i := 0
@@ -240,36 +259,42 @@ func (tc *TransCache) Clear(chIDs []string) {
 	for _, chID := range chIDs {
 		tc.cacheInstance(chID).Clear()
 	}
-	tc.cacheMux.Unlock()
 }
 
 // GetItemIDs returns a list of item IDs matching prefix
 func (tc *TransCache) GetItemIDs(chID, prfx string) (itmIDs []string) {
-	tc.cacheMux.RLock()
-	itmIDs = tc.cacheInstance(chID).GetItemIDs(prfx)
-	tc.cacheMux.RUnlock()
-	return
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
+	return tc.cacheInstance(chID).GetItemIDs(prfx)
 }
 
 // GetItemExpiryTime returns the expiry time of an item, ok is false if not found
 func (tc *TransCache) GetItemExpiryTime(chID, itmID string) (exp time.Time, ok bool) {
-	tc.cacheMux.RLock()
-	defer tc.cacheMux.RUnlock()
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
 	return tc.cacheInstance(chID).GetItemExpiryTime(itmID)
 }
 
 // HasItem verifies if Item is in the cache
 func (tc *TransCache) HasItem(chID, itmID string) (has bool) {
-	tc.cacheMux.RLock()
-	has = tc.cacheInstance(chID).HasItem(itmID)
-	tc.cacheMux.RUnlock()
-	return
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
+	return tc.cacheInstance(chID).HasItem(itmID)
 }
 
 // GetCacheStats returns on overview of full cache
 func (tc *TransCache) GetCacheStats(chIDs []string) (cs map[string]*CacheStats) {
 	cs = make(map[string]*CacheStats)
-	tc.cacheMux.RLock()
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
 	if len(chIDs) == 0 {
 		for chID := range tc.cache {
 			chIDs = append(chIDs, chID)
@@ -278,7 +303,6 @@ func (tc *TransCache) GetCacheStats(chIDs []string) (cs map[string]*CacheStats) 
 	for _, chID := range chIDs {
 		cs[chID] = tc.cacheInstance(chID).GetCacheStats()
 	}
-	tc.cacheMux.RUnlock()
 	return
 }
 
@@ -295,9 +319,9 @@ type TransCacheOpts struct {
 // NewTransCacheWithOfflineCollector constructs a new TransCache with OfflineCollector if opts are
 // provided. If not it runs NewTransCache constructor. Cache configuration is taken from cfg and logs
 // will be sent to l logger.
-func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*CacheConfig, l logger) (tc *TransCache, err error) {
+func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*CacheConfig, l logger, transactinal bool) (tc *TransCache, err error) {
 	if opts == nil { // if no opts are provided, create a TransCache without offline collector
-		return NewTransCache(cfg), nil
+		return NewTransCache(cfg, transactinal), nil
 	}
 	if opts.FileSizeLimit <= 0 {
 		return nil, fmt.Errorf("fileSizeLimit has to be bigger than 0. Current fileSizeLimit <%v> bytes", opts.FileSizeLimit)
@@ -312,6 +336,7 @@ func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*Cac
 		cache:             make(map[string]*Cache),
 		cfg:               cfg,
 		transactionBuffer: make(map[string][]*transactionItem),
+		transactional:     transactinal,
 	}
 	var wg sync.WaitGroup                   // wait for all goroutines to finish reading dump
 	errChan := make(chan error, 1)          // signal error from newCacheFromFolder
@@ -321,19 +346,17 @@ func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*Cac
 		if err := os.MkdirAll(path.Join(opts.DumpPath, cacheName), 0755); err != nil {
 			return nil, err
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			offColl := NewOfflineCollector(cacheName, opts, l)
 			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.Clone, config.OnEvicted, config.Replicate)
 			if err != nil {
 				errChan <- err
 				return
 			}
-			tc.cacheMux.Lock()
+			tc.cacheMux.Lock() // locker in this case is used only within function
 			tc.cache[cacheName] = cache
 			tc.cacheMux.Unlock()
-		}()
+		})
 	}
 	go func() { // wait in goroutine for reading from dump to be finished. In cases when an error is returned from newCacheFromFolder, instantly return the error and stop proccessing
 		wg.Wait()
@@ -358,14 +381,12 @@ func (tc *TransCache) DumpAll() (err error) {
 		if cache.offCollector == nil {
 			return fmt.Errorf("couldn't dump cache to file, %s offCollector is nil", cacheKey)
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := cache.DumpToFile(); err != nil {
 				cache.offCollector.logger.Err(err.Error()) // dont stop other caches from dumping if previous DumpToFile errors
 				errChan <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errChan) // Close the channel after all goroutines are done
@@ -383,14 +404,12 @@ func (tc *TransCache) RewriteAll() (err error) {
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(tc.cache)) // Channel to collect errors
 	for _, cache := range tc.cache {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := cache.RewriteDumpFiles(); err != nil { // dont stop other
 				// caches from rewriting if previous RewriteDumpFiles errors
 				errChan <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errChan) // Close the channel after all goroutines are done
@@ -561,9 +580,7 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 			if err != nil {
 				return fmt.Errorf("failed to open file %s inside zip: %w", f.Name, err)
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				// Read the entire file into memory, then decode it
 				fileInBytes, err := io.ReadAll(rc)
 				rc.Close()
@@ -587,7 +604,7 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 						tc.cache[chInstanceName].Remove(oce.ItemID)
 					}
 				}
-			}()
+			})
 		}
 	} else {
 		err = filepath.WalkDir(fullPath, func(path string, d fs.DirEntry, err error) error {
@@ -597,9 +614,7 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 			if d.IsDir() {
 				return nil
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				r, err := mmap.Open(path)
 				if err != nil {
 					errChan <- fmt.Errorf("error opening file <%s> in memory: %w", path, err)
@@ -623,7 +638,7 @@ func (tc *TransCache) Restore(backupPath string) (err error) {
 						tc.cache[chInstanceName].Remove(oce.ItemID)
 					}
 				}
-			}()
+			})
 			return nil
 		})
 		if err != nil {
@@ -706,6 +721,17 @@ func (tc *TransCache) clearCacheAndDumpFiles(clearCache bool) (err error) {
 	}
 }
 
+func (tc *TransCache) GetInstanceNames() (instances []string) {
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
+	for instance := range tc.cache {
+		instances = append(instances, instance)
+	}
+	return
+}
+
 // Snapshot will lock all chache instances, backup the live dump folder taking zip as parameter to zip the backup or not, after which it cleares the live dump folder and creates new dump files out of the live cache entities inside TransCache, and finaly unlock all cache instances
 func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
 	if err := tc.BackupDumpFolder(backupFolderPath, zip); err != nil {
@@ -714,32 +740,25 @@ func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
 	if err := tc.clearCacheAndDumpFiles(false); err != nil {
 		return err
 	}
-
 	var wg sync.WaitGroup           // wait for all goroutines to finish
 	errChan := make(chan error, 1)  // signal error from goroutines
 	finished := make(chan struct{}) // signal snapshot finished
-	tc.cacheMux.RLock()
-	for _, chacheInstance := range tc.cache {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			chacheInstance.Lock()
-			defer chacheInstance.Unlock()
-			for _, cache := range chacheInstance.cache {
-				if writeErr := chacheInstance.offCollector.writeEntity(&CacheEntity{
-					IsSet:      true,
-					ItemID:     cache.itemID,
-					Value:      cache.value,
-					ExpiryTime: cache.expiryTime,
-					GroupIDs:   cache.groupIDs,
-				}); writeErr != nil {
-					errChan <- writeErr
-					return
-				}
+	for _, instanceName := range tc.GetInstanceNames() {
+		wg.Go(func() {
+			var c *Cache
+			if tc.transactional {
+				tc.cacheMux.RLock()
+				c = tc.cacheInstance(instanceName)
+				tc.cacheMux.RUnlock()
+			} else {
+				c = tc.cacheInstance(instanceName)
 			}
-		}()
+			if writeErr := c.Snapshot(); err != nil {
+				errChan <- writeErr
+				return
+			}
+		})
 	}
-	tc.cacheMux.RUnlock()
 	go func() {
 		wg.Wait() // wait for all goroutines to finish
 		close(finished)
@@ -755,21 +774,31 @@ func (tc *TransCache) Snapshot(backupFolderPath string, zip bool) (err error) {
 // GetInternalReplicationChannels will return all channels containing cache items ready for replication
 func (tc *TransCache) GetInternalReplicationChannels() (cacheChannels map[string]chan *CacheEntity) {
 	cacheChannels = make(map[string]chan *CacheEntity)
-	tc.cacheMux.RLock()
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		defer tc.cacheMux.RUnlock()
+	}
 	for chKey, c := range tc.cache {
 		if c.replicate != nil {
 			cacheChannels[chKey] = c.replicate
 		}
 	}
-	tc.cacheMux.RUnlock()
 	return
 }
 
 // ReplicateEntity will replicate a CacheEntity by either setting it or removing it from cache depending on cacheEntity.IsSet
 func (tc *TransCache) ReplicateEntity(instance string, cacheEntity *CacheEntity) {
+	var c *Cache
+	if tc.transactional {
+		tc.cacheMux.RLock()
+		c = tc.cacheInstance(instance)
+		tc.cacheMux.RUnlock()
+	} else {
+		c = tc.cacheInstance(instance)
+	}
 	if cacheEntity.IsSet {
-		tc.cacheInstance(instance).Set(cacheEntity.ItemID, cacheEntity.Value, cacheEntity.GroupIDs)
+		c.Set(cacheEntity.ItemID, cacheEntity.Value, cacheEntity.GroupIDs)
 		return
 	}
-	tc.cacheInstance(instance).Remove(cacheEntity.ItemID)
+	c.Remove(cacheEntity.ItemID)
 }

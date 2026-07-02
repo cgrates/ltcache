@@ -24,7 +24,7 @@ import (
 )
 
 func TestRemKey(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	tc.Set("t11_", "mm", "test", nil, true, "")
 	if t1, ok := tc.Get("t11_", "mm"); !ok || t1 != "test" {
 		t.Error("Error setting cache: ", ok, t1)
@@ -36,7 +36,7 @@ func TestRemKey(t *testing.T) {
 }
 
 func TestTransaction(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, true)
 	transID := tc.BeginTransaction()
 	tc.Set("mmm_", "t11", "test", nil, false, transID)
 	if t1, ok := tc.Get("mmm_", "t11"); ok || t1 == "test" {
@@ -61,7 +61,7 @@ func TestTransaction(t *testing.T) {
 }
 
 func TestTransactionRemove(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, true)
 	transID := tc.BeginTransaction()
 	tc.Set("t21_", "mm", "test", nil, false, transID)
 	tc.Set("t21_", "nn", "test", nil, false, transID)
@@ -82,7 +82,7 @@ func TestTransactionRemove(t *testing.T) {
 }
 
 func TestTransactionRemoveGroup(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, true)
 	transID := tc.BeginTransaction()
 	tc.Set("t21_", "mm", "test", []string{"grp1"}, false, transID)
 	tc.Set("t21_", "nn", "test", []string{"grp1"}, false, transID)
@@ -103,7 +103,7 @@ func TestTransactionRemoveGroup(t *testing.T) {
 }
 
 func TestTransactionRollback(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, true)
 	transID := tc.BeginTransaction()
 	tc.Set("aaa_", "t31", "test", nil, false, transID)
 	if t1, ok := tc.Get("aaa_", "t31"); ok || t1 == "test" {
@@ -126,7 +126,7 @@ func TestTransactionRollback(t *testing.T) {
 }
 
 func TestTransactionRemBefore(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, true)
 	transID := tc.BeginTransaction()
 	tc.Remove("t41_", "mm", false, transID)
 	tc.Remove("t41_", "nn", false, transID)
@@ -142,7 +142,7 @@ func TestTransactionRemBefore(t *testing.T) {
 }
 
 func TestTCGetGroupItems(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	tc.Set("xxx_", "t1", "test", []string{"grp1"}, true, "")
 	tc.Set("xxx_", "t2", "test", []string{"grp1"}, true, "")
 	if grpItms := tc.GetGroupItems("xxx_", "grp1"); len(grpItms) != 2 {
@@ -154,7 +154,7 @@ func TestTCGetGroupItems(t *testing.T) {
 }
 
 func TestRemGroup(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	tc.Set("xxx_", "t1", "test", []string{"grp1"}, true, "")
 	tc.Set("xxx_", "t2", "test", []string{"grp1"}, true, "")
 	tc.RemoveGroup("xxx_", "grp1", true, "")
@@ -168,7 +168,7 @@ func TestRemGroup(t *testing.T) {
 func TestCacheCount(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"dst_": {MaxItems: -1},
-		"rpf_": {MaxItems: -1}})
+		"rpf_": {MaxItems: -1}}, false)
 	tc.Set("dst_", "A1", "1", nil, true, "")
 	tc.Set("dst_", "A2", "2", nil, true, "")
 	tc.Set("rpf_", "A3", "3", nil, true, "")
@@ -182,7 +182,7 @@ func TestCacheCount(t *testing.T) {
 func TestTransCacheNilOptsCacheCount(t *testing.T) {
 	tc, err := NewTransCacheWithOfflineCollector(nil, map[string]*CacheConfig{
 		"dst_": {MaxItems: -1},
-		"rpf_": {MaxItems: -1}}, nil)
+		"rpf_": {MaxItems: -1}}, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,7 +199,7 @@ func TestTransCacheNilOptsCacheCount(t *testing.T) {
 func TestCacheGetStats(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"part1": {MaxItems: -1},
-		"part2": {MaxItems: -1}})
+		"part2": {MaxItems: -1}}, false)
 	testCIs := []*cachedItem{
 		{itemID: "_1_", value: "one"},
 		{itemID: "_2_", value: "two", groupIDs: []string{"grp1"}},
@@ -226,7 +226,7 @@ func TestCacheGetStats(t *testing.T) {
 func TestCacheConcurrent(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"dst_": {MaxItems: -1},
-		"rpf_": {MaxItems: -1}})
+		"rpf_": {MaxItems: -1}}, false)
 	s := &struct{ Prefix string }{Prefix: "+49"}
 	tc.Set("dst_", "DE", s, nil, true, "")
 	wg := new(sync.WaitGroup)
@@ -258,7 +258,7 @@ func TestGetClone(t *testing.T) {
 			MaxItems: -1,
 			Clone:    true,
 		},
-	})
+	}, false)
 	a := &TenantID{Tenant: "cgrates.org", ID: "ID#1"}
 	tc.Set("t11_", "mm", a, nil, true, "")
 	if t1, ok := tc.Get("t11_", "mm"); !ok {
@@ -281,7 +281,7 @@ func TestGetClone2(t *testing.T) {
 			MaxItems: -1,
 			Clone:    true,
 		},
-	})
+	}, false)
 	tc.Set("t11_", "mm", nil, nil, true, "")
 	if x, ok := tc.Get("t11_", "mm"); !ok {
 		t.Error("Couldnt get cache value, ok: ", ok)
@@ -895,13 +895,13 @@ func TestNewTransCacheWithOfflineCollector(t *testing.T) {
 		RewriteInterval: 10 * time.Second,
 		FileSizeLimit:   1000,
 	}
-	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Error(err)
 	} else if rcv := logBuf.String(); !strings.Contains(rcv, "") {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
 	}
-	expTc := NewTransCache(map[string]*CacheConfig{})
+	expTc := NewTransCache(map[string]*CacheConfig{}, false)
 
 	expTc.cache[DefaultCacheInstance].onEvicted = tc.cache[DefaultCacheInstance].onEvicted
 	expTc.cache[DefaultCacheInstance].lruIdx = tc.cache[DefaultCacheInstance].lruIdx
@@ -937,7 +937,7 @@ func TestNewTransCacheWithOfflineCollectorErr1(t *testing.T) {
 		RewriteInterval: 10 * time.Second,
 		FileSizeLimit:   1000,
 	}
-	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	expErr := "stat /tmp/doesntExist*default: no such file or directory"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -957,7 +957,7 @@ func TestNewTransCacheWithOfflineCollectorErr2(t *testing.T) {
 		RewriteInterval: 10 * time.Second,
 		FileSizeLimit:   1000,
 	}
-	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	_, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	expErr := "mkdir /root/*default: permission denied"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -992,7 +992,7 @@ func TestNewTransCacheWithOfflineCollectorErr3(t *testing.T) {
 		RewriteInterval: 10 * time.Second,
 		FileSizeLimit:   1000,
 	}
-	_, err = NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	_, err = NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	expErr := "failed to decode CacheEntity at </tmp/internal_db/*default/tmpfile>: unexpected EOF"
 	if err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
@@ -1009,7 +1009,7 @@ func TestTransCacheDumpAllDump0(t *testing.T) {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", expTc, tc)
 	}
 	expErr := "couldn't dump cache to file, *default offCollector is nil"
-	if err := NewTransCache(map[string]*CacheConfig{}).DumpAll(); err == nil || err.Error() != expErr {
+	if err := NewTransCache(map[string]*CacheConfig{}, false).DumpAll(); err == nil || err.Error() != expErr {
 		t.Errorf("Expected error <%+v>, \nReceived error <%+v>", expErr, err)
 	}
 }
@@ -1100,7 +1100,7 @@ func TestTransCacheRewriteAllDump0(t *testing.T) {
 	if !reflect.DeepEqual(expTc, tc) {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", expTc, tc)
 	}
-	tc = NewTransCache(map[string]*CacheConfig{})
+	tc = NewTransCache(map[string]*CacheConfig{}, false)
 	tc.cache[DefaultCacheInstance].offCollector = &OfflineCollector{fileSizeLimit: 1000,
 		rewriteInterval: 0, file: tmpFile}
 	expErr := "error <lstat : no such file or directory> walking path <>"
@@ -1391,7 +1391,7 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 
 func TestTranscacheShutdownErr(t *testing.T) {
 	var logBuf bytes.Buffer
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	tc.cache[DefaultCacheInstance].offCollector = &OfflineCollector{dumpInterval: 0,
 		logger: &testLogger{log.New(&logBuf, "", 0)}}
 	tc.Shutdown()
@@ -1428,7 +1428,7 @@ func TestTransCacheBackupDumpFolderOK(t *testing.T) {
 		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1550,7 +1550,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1651,7 +1651,7 @@ func TestTransCacheBackupDumpFolderZip(t *testing.T) {
 	}
 }
 func TestTransCacheBackupDumpFolderErr1(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	expErr := "cache offCollector is nil"
 	if err := tc.BackupDumpFolder("", false); err == nil || expErr != err.Error() {
 		t.Errorf("expected <%v>, received <%v>", expErr, err)
@@ -1685,7 +1685,7 @@ func TestTransCacheBackupDumpFolderEmptyPath(t *testing.T) {
 		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1804,7 +1804,7 @@ func TestTransCacheBackupDumpFolderErr4(t *testing.T) {
 		FileSizeLimit:   1,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1821,7 +1821,7 @@ func TestNewTransCacheWithOfflineCollectorFileSizeLimitErr(t *testing.T) {
 	var logBuf bytes.Buffer
 	expErr := "fileSizeLimit has to be bigger than 0. Current fileSizeLimit <0> bytes"
 	opts := &TransCacheOpts{}
-	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, nil); err == nil || expErr != err.Error() {
+	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, nil, false); err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received <%v>", expErr, err)
 	} else if rcv := logBuf.String(); rcv != "" {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
@@ -1850,7 +1850,7 @@ func TestNewTransCacheWithOfflineCollectorTimeoutErr(t *testing.T) {
 	}
 	expErr := `building TransCache from </tmp/internal_db> timed out after <0s>`
 	if _, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)}); err == nil || expErr != err.Error() {
+		&testLogger{log.New(&logBuf, "", 0)}, false); err == nil || expErr != err.Error() {
 		t.Errorf("expected error <%v>, received error <%v>", expErr, err)
 	} else if rcv := logBuf.String(); rcv != "" {
 		t.Errorf("Expected <%+v>, \nReceived <%+v>", "", rcv)
@@ -1868,7 +1868,7 @@ func BenchmarkSet(b *testing.B) {
 	}
 	rand.Seed(time.Now().UTC().UnixNano())
 	min, max := 0, len(cacheItems)-1 // so we can have random index
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	for n := 0; n < b.N; n++ {
 		ci := cacheItems[rand.Intn(max-min)+min]
 		tc.Set(ci[0], ci[1], ci[2], nil, false, "")
@@ -1886,7 +1886,7 @@ func BenchmarkSetWithGroups(b *testing.B) {
 	}
 	rand.Seed(time.Now().UTC().UnixNano())
 	min, max := 0, len(cacheItems)-1 // so we can have random index
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	for n := 0; n < b.N; n++ {
 		ci := cacheItems[rand.Intn(max-min)+min]
 		tc.Set(ci[0], ci[1], ci[2], []string{"grp1", "grp2"}, false, "")
@@ -1902,7 +1902,7 @@ func BenchmarkGet(b *testing.B) {
 		{"aaa_", "4", "1"},
 		{"aaa_", "5", "1"},
 	}
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 	for _, ci := range cacheItems {
 		tc.Set(ci[0], ci[1], ci[2], nil, false, "")
 	}
@@ -1941,7 +1941,7 @@ func TestTransCacheRestoreOK1(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1956,7 +1956,7 @@ func TestTransCacheRestoreOK1(t *testing.T) {
 
 	opts.DumpPath = dumpPath2
 	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2002,7 +2002,7 @@ func TestTransCacheRestoreOK2(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2019,7 +2019,7 @@ func TestTransCacheRestoreOK2(t *testing.T) {
 	tc.Set(DefaultCacheInstance, "item2", "value2_updated", []string{"grp1", "grp2"}, true, "")
 
 	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2065,7 +2065,7 @@ func TestTransCacheRestoreZip1(t *testing.T) {
 		FileSizeLimit: 1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2079,7 +2079,7 @@ func TestTransCacheRestoreZip1(t *testing.T) {
 	}
 
 	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2129,7 +2129,7 @@ func TestTransCacheRestoreZip2(t *testing.T) {
 		FileSizeLimit: 1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2143,7 +2143,7 @@ func TestTransCacheRestoreZip2(t *testing.T) {
 	}
 
 	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2189,7 +2189,7 @@ func TestTransCacheRestoreNoBackup(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2216,7 +2216,7 @@ func TestTransCacheRestoreInvalidPath(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2250,7 +2250,7 @@ func TestTransCacheRestoreEmptyBackupPath(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2264,7 +2264,7 @@ func TestTransCacheRestoreEmptyBackupPath(t *testing.T) {
 
 	// Create a new TransCache
 	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2303,7 +2303,7 @@ func TestTransCacheRestoreLatestBackup(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2331,7 +2331,7 @@ func TestTransCacheRestoreLatestBackup(t *testing.T) {
 
 	// Create a new TransCache
 	tc2, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{},
-		&testLogger{log.New(&logBuf, "", 0)})
+		&testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2375,7 +2375,7 @@ func TestTransCacheSnapshotOK(t *testing.T) {
 		RewriteInterval: -1,
 		FileSizeLimit:   1,
 	}
-	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2444,7 +2444,7 @@ func TestTransCacheSnapshotZip(t *testing.T) {
 		RewriteInterval: -1,
 		FileSizeLimit:   1,
 	}
-	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2484,7 +2484,7 @@ func TestTransCacheSnapshotBackupError(t *testing.T) {
 		RewriteInterval: -1,
 		FileSizeLimit:   1,
 	}
-	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)})
+	tc, err := NewTransCacheWithOfflineCollector(opts, map[string]*CacheConfig{}, &testLogger{log.New(&logBuf, "", 0)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2502,7 +2502,7 @@ func TestGetInternalReplicationChannels(t *testing.T) {
 			MaxItems:  -1,
 			Replicate: make(chan *CacheEntity),
 		},
-	})
+	}, false)
 	intChans := tc.GetInternalReplicationChannels()
 
 	var wg sync.WaitGroup
@@ -2566,7 +2566,7 @@ func TestGetInternalReplicationChannels(t *testing.T) {
 
 func TestReplicateEntity(t *testing.T) {
 
-	tc := NewTransCache(map[string]*CacheConfig{})
+	tc := NewTransCache(map[string]*CacheConfig{}, false)
 
 	tc.Set("t11_", "mm", "test", nil, true, "")
 

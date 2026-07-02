@@ -646,3 +646,21 @@ func zipFolder(srcFolder, destZip string) error {
 		return err
 	})
 }
+
+// Snapshot will lock the cache, and write on files each item it contains
+func (c *Cache) Snapshot() (err error) {
+	c.Lock()
+	defer c.Unlock()
+	for _, cachedItem := range c.cache {
+		if err = c.offCollector.writeEntity(&CacheEntity{
+			IsSet:      true,
+			ItemID:     cachedItem.itemID,
+			Value:      cachedItem.value,
+			ExpiryTime: cachedItem.expiryTime,
+			GroupIDs:   cachedItem.groupIDs,
+		}); err != nil {
+			return
+		}
+	}
+	return
+}
