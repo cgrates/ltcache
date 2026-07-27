@@ -1,7 +1,5 @@
-/*
-TransCache is released under the MIT License <http://www.opensource.org/licenses/mit-license.php
-Copyright (C) ITsysCOM GmbH. All Rights Reserved.
-*/
+// Copyright ITsysCOM GmbH
+// SPDX-License-Identifier: MIT
 
 package ltcache
 

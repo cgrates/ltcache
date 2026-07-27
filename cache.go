@@ -1,11 +1,5 @@
-/*
-Cache.go is released under the MIT License <http://www.opensource.org/licenses/mit-license.php
-Copyright (C) ITsysCOM GmbH. All Rights Reserved.
-
-A LRU cache with TTL capabilities.
-Original ideas from golang groupcache/lru.go
-
-*/
+// Copyright ITsysCOM GmbH
+// SPDX-License-Identifier: MIT
 
 package ltcache
 
