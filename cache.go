@@ -135,6 +135,14 @@ func (c *Cache) HasItem(itmID string) (has bool) {
 	return
 }
 
+// Compute will compute the value of an item
+func (c *Cache) Compute(itmID string, value any) (any, error) {
+	if valCompAny, computable := value.(CacheComputer); computable { // check if interface is computable
+		return valCompAny.CacheCompute() // store the computed value in cache instead
+	}
+	return nil, fmt.Errorf("failed to cast value <%#v> to <CacheComputer> for item <%v>", value, itmID)
+}
+
 // Set sets/adds a value to the cache.
 func (c *Cache) Set(itmID string, value any, grpIDs []string) {
 	if c.maxEntries == DisabledCaching {
@@ -381,12 +389,19 @@ func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Dura
 	}
 	cache = NewCache(maxEntries, ttl, staticTTL, clone, onEvicted, replicate)
 
-	handleEntity := func(oce *CacheEntity) { // set or remove read item from cache
+	handleEntity := func(oce *CacheEntity) (err error) { // set or remove read item from cache
 		if oce.IsSet {
+			if valCompAny, computable := oce.Value.(CacheComputer); computable { // check if interface is computable
+				// store the computed value in cache instead
+				if oce.Value, err = valCompAny.CacheCompute(); err != nil {
+					return err
+				}
+			}
 			cache.Set(oce.ItemID, oce.Value, oce.GroupIDs)
 		} else {
 			cache.Remove(oce.ItemID)
 		}
+		return err
 	}
 	for _, filepath := range paths { // range over all files inside cache dump and set the items read into cache
 		if err = readAndDecodeFile(filepath, handleEntity); err != nil {

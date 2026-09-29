@@ -173,7 +173,7 @@ func getFilePaths(dir string) ([]string, error) {
 }
 
 // readAndDecodeFile reads dump file and decodes into CacheEntity to be used by handleEntity function
-func readAndDecodeFile(filepath string, handleEntity func(oce *CacheEntity)) error {
+func readAndDecodeFile(filepath string, handleEntity func(oce *CacheEntity) (err error)) error {
 	r, err := mmap.Open(filepath) // open mmap reader
 	if err != nil {
 		return fmt.Errorf("error opening file <%s> in memory: %w", filepath, err)
@@ -191,7 +191,9 @@ func readAndDecodeFile(filepath string, handleEntity func(oce *CacheEntity)) err
 			return fmt.Errorf("failed to decode CacheEntity at <%s>: %w", filepath, err)
 		}
 		// Call the handler function for each decoded entity
-		handleEntity(&oce)
+		if err = handleEntity(&oce); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -378,13 +380,14 @@ func (coll *OfflineCollector) getFilePathsAndOfflineEntities() (filePaths []stri
 	if shouldSkipRewrite(filePaths, coll.fldrPath) {
 		return nil, nil, true, nil
 	}
-	oceMap = make(map[string]*CacheEntity)   // momentarily hold only necessary entities of all files of cache dump. Needed so we don’t write something which will be removed on the next coming files.
-	handleEntity := func(oce *CacheEntity) { // will add/delete CacheEntity from oceMap
+	oceMap = make(map[string]*CacheEntity)             // momentarily hold only necessary entities of all files of cache dump. Needed so we don’t write something which will be removed on the next coming files.
+	handleEntity := func(oce *CacheEntity) (_ error) { // will add/delete CacheEntity from oceMap
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
 			delete(oceMap, oce.ItemID)
 		}
+		return nil
 	}
 	for i := range filePaths { // populate oceMap from dump files
 		if err := readAndDecodeFile(filePaths[i], handleEntity); err != nil {

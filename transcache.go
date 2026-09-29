@@ -49,6 +49,11 @@ type CacheCloner interface {
 	CacheClone() any
 }
 
+// CacheComputer is an interface for objects to compute themselves into interface
+type CacheComputer interface {
+	CacheCompute() (any, error)
+}
+
 type transactionItem struct {
 	verb     string   // action which will be executed on cache
 	cacheID  string   // cache instance identifier
@@ -159,6 +164,11 @@ func (tc *TransCache) Get(chID, itmID string) (any, bool) {
 		defer tc.cacheMux.RUnlock()
 	}
 	return tc.cacheInstance(chID).Get(itmID)
+}
+
+// Compute will compute the value of an item for a cache instance
+func (tc *TransCache) Compute(chID string, itmID string, value any) (any, error) {
+	return tc.cacheInstance(chID).Compute(itmID, value)
 }
 
 // Set will add/edit an item to the cache
