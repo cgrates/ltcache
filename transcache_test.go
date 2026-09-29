@@ -250,6 +250,15 @@ func (tID *TenantID) CacheClone() any {
 	return tClone
 }
 
+func (tID *TenantID) CacheCompute() (any, error) {
+	if tID.ID == "fail" {
+		return nil, fmt.Errorf("fail the compute on purpuse")
+	}
+	tID.Tenant = tID.Tenant + "Computed"
+	tID.ID = tID.ID + "Computed"
+	return tID, nil
+}
+
 func TestGetClone(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"t11_": {
@@ -270,6 +279,53 @@ func TestGetClone(t *testing.T) {
 		if reflect.DeepEqual(tcCloned, a) {
 			t.Errorf("Expecting: %+v, received: %+v", a, tcCloned)
 		}
+	}
+}
+
+func TestTransCacheCompute(t *testing.T) {
+	tc := NewTransCache(map[string]*CacheConfig{
+		"t11_": {
+			MaxItems: -1,
+			Clone:    true,
+		},
+	}, false)
+	a := &TenantID{Tenant: "cgrates.org", ID: "ID#1"}
+	exp := &TenantID{Tenant: "cgrates.orgComputed", ID: "ID#1Computed"}
+	if rcv, err := tc.Compute("t11_", "mm", a); err != nil {
+		t.Error(err)
+	} else if !reflect.DeepEqual(exp, rcv) {
+		t.Errorf("expected <%v>, received <%v>", exp, rcv)
+	}
+}
+
+func TestTransCacheComputeErr1(t *testing.T) {
+	tc := NewTransCache(map[string]*CacheConfig{
+		"t11_": {
+			MaxItems: -1,
+			Clone:    true,
+		},
+	}, false)
+	a := &TenantID{Tenant: "cgrates.org", ID: "fail"}
+	if _, err := tc.Compute("t11_", "mm", a); err == nil || err.Error() != "fail the compute on purpuse" {
+		t.Errorf("expected err <fail the compute on purpuse>, received <%v>", err)
+	}
+}
+
+func TestTransCacheComputeErr3(t *testing.T) {
+	tc := NewTransCache(map[string]*CacheConfig{
+		"t11_": {
+			MaxItems: -1,
+			Clone:    true,
+		},
+	}, false)
+	type nonCacheComputeStruct struct {
+		Tenant string
+		ID     string
+	}
+	a := &nonCacheComputeStruct{Tenant: "cgrates.org", ID: "ID#1Computed"}
+	exp := `failed to cast value <&ltcache.nonCacheComputeStruct{Tenant:"cgrates.org", ID:"ID#1Computed"}> to <CacheComputer> for item <mm>`
+	if _, err := tc.Compute("t11_", "mm", a); err == nil || err.Error() != exp {
+		t.Errorf("expected err <%v>, received <%v>", exp, err)
 	}
 }
 
@@ -1291,6 +1347,98 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 
 	if combinedContent != "" {
 		t.Errorf("Expected empty file, received <%s>", combinedContent)
+	}
+}
+
+func TestTransCacheLoadEntitiesFromFolderCompute(t *testing.T) {
+	path := "/tmp/internal_db"
+	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Errorf("Failed to delete temporary dir: %v", err)
+		}
+	}()
+	file, err := os.OpenFile(path+"/*default/file1", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Error(err)
+	}
+	gob.Register(new(TenantID))
+	writer := bufio.NewWriter(file)
+	encoder := gob.NewEncoder(writer)
+	if err := encodeAndDump(&CacheEntity{IsSet: true,
+		ItemID: "item1", Value: &TenantID{Tenant: "tenant1", ID: "ID#1"}, GroupIDs: []string{"gr1"}}, encoder, writer); err != nil {
+		t.Error(err)
+	}
+	file.Close()
+
+	if files, err := os.ReadDir(path + "/*default"); err != nil {
+		t.Error(err)
+	} else if len(files) != 1 {
+		t.Errorf("expected 1 files in <%v>, received <%v>", path+"/*default", len(files))
+	}
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		DumpInterval:    10000 * time.Millisecond,
+		RewriteInterval: -1,
+		FileSizeLimit:   -1,
+	}
+	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
+	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	if err != nil {
+		t.Error(err)
+	}
+
+	var expVal any = &TenantID{Tenant: "tenant1Computed", ID: "ID#1Computed"}
+	val, ok := c.Get("item1")
+	if !ok {
+		t.Errorf("failed to get item1")
+	} else if !reflect.DeepEqual(val, expVal) {
+		t.Errorf("expected <%#v>, received <%#v>", expVal, val)
+	}
+}
+
+func TestTransCacheLoadEntitiesFromFolderComputeErr1(t *testing.T) {
+	path := "/tmp/internal_db"
+	if err := os.MkdirAll(path+"/*default", 0755); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.RemoveAll(path); err != nil {
+			t.Errorf("Failed to delete temporary dir: %v", err)
+		}
+	}()
+	file, err := os.OpenFile(path+"/*default/file1", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Error(err)
+	}
+	gob.Register(new(TenantID))
+	writer := bufio.NewWriter(file)
+	encoder := gob.NewEncoder(writer)
+	if err := encodeAndDump(&CacheEntity{IsSet: true,
+		ItemID: "item1", Value: &TenantID{Tenant: "tenant1", ID: "fail"}, GroupIDs: []string{"gr1"}}, encoder, writer); err != nil {
+		t.Error(err)
+	}
+	file.Close()
+
+	if files, err := os.ReadDir(path + "/*default"); err != nil {
+		t.Error(err)
+	} else if len(files) != 1 {
+		t.Errorf("expected 1 files in <%v>, received <%v>", path+"/*default", len(files))
+	}
+	var logBuf bytes.Buffer
+	opts := &TransCacheOpts{
+		DumpPath:        path,
+		DumpInterval:    10000 * time.Millisecond,
+		RewriteInterval: -1,
+		FileSizeLimit:   -1,
+	}
+	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
+	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	if err == nil || err.Error() != "fail the compute on purpuse" {
+		t.Errorf("expected error <fail the compute on purpuse>, received <%v>", err)
 	}
 }
 

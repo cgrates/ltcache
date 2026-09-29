@@ -92,7 +92,7 @@ func TestOfflineCollectorWriteEntityUniqueFileNames(t *testing.T) {
 			t.Fatalf("duplicate filename found: %s", entry.Name())
 		}
 		seen[entry.Name()] = struct{}{}
-		if err := readAndDecodeFile(filepath.Join(dir, entry.Name()), func(oce *CacheEntity) {}); err != nil {
+		if err := readAndDecodeFile(filepath.Join(dir, entry.Name()), func(oce *CacheEntity) (err error) { return nil }); err != nil {
 			t.Fatalf("failed to decode %s: %v", entry.Name(), err)
 		}
 	}
@@ -169,12 +169,13 @@ func TestReadAndDecodeFileDecodeSet(t *testing.T) {
 		})
 	}
 	oceMap := map[string]*CacheEntity{}
-	handleEntity := func(oce *CacheEntity) { // will add/delete CacheEntity from oceMap
+	handleEntity := func(oce *CacheEntity) (_ error) { // will add/delete CacheEntity from oceMap
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
 			delete(oceMap, oce.ItemID)
 		}
+		return nil
 	}
 	exp := map[string]*CacheEntity{
 		"testID": {IsSet: true, ItemID: "testID", Value: "value",
@@ -215,12 +216,13 @@ func TestReadAndDecodeFileDecodeRemove(t *testing.T) {
 			GroupIDs: []string{"gpID"},
 		},
 	}
-	handleEntity := func(oce *CacheEntity) { // will add/delete CacheEntity from oceMap
+	handleEntity := func(oce *CacheEntity) (_ error) { // will add/delete CacheEntity from oceMap
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
 			delete(oceMap, oce.ItemID)
 		}
+		return nil
 	}
 	exp := map[string]*CacheEntity{}
 	if err := readAndDecodeFile(path+"/file", handleEntity); err != nil {
@@ -234,12 +236,13 @@ func TestReadAndDecodeFileDecodeRemove(t *testing.T) {
 func TestReadAndDecodeFileErr1(t *testing.T) {
 	expErr := "error opening file <> in memory: open : no such file or directory"
 	oceMap := map[string]*CacheEntity{}
-	handleEntity := func(oce *CacheEntity) {
+	handleEntity := func(oce *CacheEntity) (_ error) {
 		if oce.IsSet {
 			oceMap[oce.ItemID] = oce
 		} else {
 			delete(oceMap, oce.ItemID)
 		}
+		return nil
 	}
 	if err := readAndDecodeFile("", handleEntity); err == nil ||
 		err.Error() != expErr {
@@ -656,8 +659,9 @@ func BenchmarkReadAndDecodeFile1(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		count := 0
-		err := readAndDecodeFile(file.Name(), func(oce *CacheEntity) {
+		err := readAndDecodeFile(file.Name(), func(oce *CacheEntity) (_ error) {
 			count++
+			return nil
 		})
 		if err != nil {
 			b.Fatal(err)
