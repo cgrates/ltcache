@@ -54,12 +54,11 @@ type Cache struct {
 	ttlIdx  *list.List
 	ttlRefs map[string]*list.Element // index the list element based on it' key in cache
 
-	clone        bool              // if true, a clone of the value when getting value from cache will be returned
 	offCollector *OfflineCollector // used dump cache to files
 }
 
 // NewCache initializes a new cache.
-func NewCache(maxEntries int, ttl time.Duration, staticTTL, clone bool,
+func NewCache(maxEntries int, ttl time.Duration, staticTTL bool,
 	onEvicted []func(itmID string, value any), replicate chan *CacheEntity) (c *Cache) {
 	c = &Cache{
 		cache:      make(map[string]*cachedItem),
@@ -71,7 +70,6 @@ func NewCache(maxEntries int, ttl time.Duration, staticTTL, clone bool,
 		lruRefs:    make(map[string]*list.Element),
 		ttlIdx:     list.New(),
 		ttlRefs:    make(map[string]*list.Element),
-		clone:      clone,
 		replicate:  replicate,
 	}
 	c.onEvicted = append(c.onEvicted, onEvicted...)
@@ -97,15 +95,7 @@ func (c *Cache) Get(itmID string) (value any, ok bool) {
 	if !has {
 		return
 	}
-	if c.clone { // try cloning to avoid concurrency only if specified
-		if valClnAny, clnable := ci.value.(CacheCloner); clnable {
-			value, ok = valClnAny.CacheClone(), true
-		} else {
-			value, ok = ci.value, true
-		}
-	} else {
-		value, ok = ci.value, true
-	}
+	value, ok = ci.value, true
 	if c.maxEntries != UnlimitedCaching { // update lru indexes
 		c.lruIdx.MoveToFront(c.lruRefs[itmID])
 	}
@@ -378,7 +368,9 @@ func (c *Cache) GetCacheStats() (cs *CacheStats) {
 }
 
 // NewCacheFromFolder construct a new Cache from reading dump files
-func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Duration, staticTTL, clone bool, onEvicted []func(itmID string, value any), replicate chan *CacheEntity) (cache *Cache, err error) {
+func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Duration,
+	staticTTL bool, onEvicted []func(itmID string, value any),
+	replicate chan *CacheEntity) (cache *Cache, err error) {
 	filePaths, err := getFilePaths(offColl.fldrPath)
 	if err != nil {
 		return nil, fmt.Errorf("error walking the path: %w", err)
@@ -387,7 +379,7 @@ func NewCacheFromFolder(offColl *OfflineCollector, maxEntries int, ttl time.Dura
 	if err != nil {
 		return
 	}
-	cache = NewCache(maxEntries, ttl, staticTTL, clone, onEvicted, replicate)
+	cache = NewCache(maxEntries, ttl, staticTTL, onEvicted, replicate)
 
 	handleEntity := func(oce *CacheEntity) (err error) { // set or remove read item from cache
 		if oce.IsSet {
