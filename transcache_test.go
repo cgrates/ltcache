@@ -244,12 +244,6 @@ type TenantID struct {
 	ID     string
 }
 
-func (tID *TenantID) CacheClone() any {
-	tClone := new(TenantID)
-	*tClone = *tID
-	return tClone
-}
-
 func (tID *TenantID) CacheCompute() (any, error) {
 	if tID.ID == "fail" {
 		return nil, fmt.Errorf("fail the compute on purpuse")
@@ -259,34 +253,10 @@ func (tID *TenantID) CacheCompute() (any, error) {
 	return tID, nil
 }
 
-func TestGetClone(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{
-		"t11_": {
-			MaxItems: -1,
-			Clone:    true,
-		},
-	}, false)
-	a := &TenantID{Tenant: "cgrates.org", ID: "ID#1"}
-	tc.Set("t11_", "mm", a, nil, true, "")
-	if t1, ok := tc.Get("t11_", "mm"); !ok {
-		t.Error("Error setting cache: ", ok, t1)
-	} else {
-		tcCloned := t1.(*TenantID)
-		if !reflect.DeepEqual(tcCloned, a) {
-			t.Errorf("Expecting: %+v, received: %+v", a, tcCloned)
-		}
-		a.ID = "ID#2"
-		if reflect.DeepEqual(tcCloned, a) {
-			t.Errorf("Expecting: %+v, received: %+v", a, tcCloned)
-		}
-	}
-}
-
 func TestTransCacheCompute(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"t11_": {
 			MaxItems: -1,
-			Clone:    true,
 		},
 	}, false)
 	a := &TenantID{Tenant: "cgrates.org", ID: "ID#1"}
@@ -302,7 +272,6 @@ func TestTransCacheComputeErr1(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"t11_": {
 			MaxItems: -1,
-			Clone:    true,
 		},
 	}, false)
 	a := &TenantID{Tenant: "cgrates.org", ID: "fail"}
@@ -315,7 +284,6 @@ func TestTransCacheComputeErr3(t *testing.T) {
 	tc := NewTransCache(map[string]*CacheConfig{
 		"t11_": {
 			MaxItems: -1,
-			Clone:    true,
 		},
 	}, false)
 	type nonCacheComputeStruct struct {
@@ -326,21 +294,6 @@ func TestTransCacheComputeErr3(t *testing.T) {
 	exp := `failed to cast value <&ltcache.nonCacheComputeStruct{Tenant:"cgrates.org", ID:"ID#1Computed"}> to <CacheComputer> for item <mm>`
 	if _, err := tc.Compute("t11_", "mm", a); err == nil || err.Error() != exp {
 		t.Errorf("expected err <%v>, received <%v>", exp, err)
-	}
-}
-
-func TestGetClone2(t *testing.T) {
-	tc := NewTransCache(map[string]*CacheConfig{
-		"t11_": {
-			MaxItems: -1,
-			Clone:    true,
-		},
-	}, false)
-	tc.Set("t11_", "mm", nil, nil, true, "")
-	if x, ok := tc.Get("t11_", "mm"); !ok {
-		t.Error("Couldnt get cache value, ok: ", ok)
-	} else if x != nil {
-		t.Errorf("Expecting: nil, received: %+v", x)
 	}
 }
 
@@ -684,56 +637,6 @@ func TestTranscacheNoItem(t *testing.T) {
 		t.Errorf("\nexpected: <%+v>, \nreceived: <%+v>", exp, rcv)
 	}
 }
-
-func TestTranscacheGetClonedNotFound(t *testing.T) {
-	tc := &TransCache{
-		cache: map[string]*Cache{
-			"testChID": {
-				cache: map[string]*cachedItem{
-					"otherItem": {},
-				},
-				clone: true,
-			},
-		},
-	}
-	chID := "testChID"
-	itmID := "testItemID"
-
-	if rcv, ok := tc.Get(chID, itmID); ok {
-		t.Errorf("\nexpected to not find item, ok: %v", ok)
-	} else if rcv != nil {
-		t.Fatalf("\nexpected nil, \nreceived: <%+v>", rcv)
-	}
-
-}
-
-func TestTranscacheGetClonedNotClonable(t *testing.T) {
-	tc := &TransCache{
-		cache: map[string]*Cache{
-			"testChID": {
-				lruIdx: list.New(),
-				lruRefs: map[string]*list.Element{
-					"testItemID": {},
-				},
-				cache: map[string]*cachedItem{
-					"testItemID": {
-						value: 3,
-					},
-				},
-				clone: true,
-			},
-		},
-	}
-	chID := "testChID"
-	itmID := "testItemID"
-
-	if rcv, ok := tc.Get(chID, itmID); !ok {
-		t.Error("Couldnt get cache value, ok: ", ok)
-	} else if rcv != 3 {
-		t.Fatalf("\nexpected <%+v>, \nreceived: <%+v>", 3, rcv)
-	}
-}
-
 func TestTranscacheRewriteAllErr1(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "test-")
 	if err != nil {
@@ -1209,7 +1112,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1NoChanges(t *testing.T) {
 		FileSizeLimit:   1000,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	_, err = NewCacheFromFolder(offColl, -1, 0, false, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1309,7 +1212,7 @@ func TestTransCacheAsyncRewriteEntitiesMinus1Changes(t *testing.T) {
 		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	c, err := NewCacheFromFolder(offColl, -1, 0, false, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1386,7 +1289,7 @@ func TestTransCacheLoadEntitiesFromFolderCompute(t *testing.T) {
 		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	c, err := NewCacheFromFolder(offColl, -1, 0, false, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}
@@ -1436,7 +1339,7 @@ func TestTransCacheLoadEntitiesFromFolderComputeErr1(t *testing.T) {
 		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	_, err = NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	_, err = NewCacheFromFolder(offColl, -1, 0, false, nil, nil)
 	if err == nil || err.Error() != "fail the compute on purpuse" {
 		t.Errorf("expected error <fail the compute on purpuse>, received <%v>", err)
 	}
@@ -1489,7 +1392,7 @@ func TestTransCacheAsyncRewriteEntitiesIntervalChanges(t *testing.T) {
 		FileSizeLimit:   -1,
 	}
 	offColl := NewOfflineCollector("/*default", opts, &testLogger{log.New(&logBuf, "", 0)})
-	c, err := NewCacheFromFolder(offColl, -1, 0, false, true, nil, nil)
+	c, err := NewCacheFromFolder(offColl, -1, 0, false, nil, nil)
 	if err != nil {
 		t.Error(err)
 	}

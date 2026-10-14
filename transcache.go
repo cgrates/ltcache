@@ -44,11 +44,6 @@ func GenUUID() string {
 		b[10:])
 }
 
-// CacheCloner is an interface for objects to clone themselves into interface
-type CacheCloner interface {
-	CacheClone() any
-}
-
 // CacheComputer is an interface for objects to compute themselves into interface
 type CacheComputer interface {
 	CacheCompute() (any, error)
@@ -67,7 +62,6 @@ type CacheConfig struct {
 	TTL       time.Duration
 	StaticTTL bool
 	OnEvicted []func(itmID string, value any)
-	Clone     bool
 	Replicate chan *CacheEntity
 }
 
@@ -83,7 +77,7 @@ func NewTransCache(cfg map[string]*CacheConfig, transactional bool) (tc *TransCa
 		transactional:     transactional,
 	}
 	for cacheID, chCfg := range cfg {
-		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.Clone, chCfg.OnEvicted, chCfg.Replicate)
+		tc.cache[cacheID] = NewCache(chCfg.MaxItems, chCfg.TTL, chCfg.StaticTTL, chCfg.OnEvicted, chCfg.Replicate)
 	}
 	return
 }
@@ -354,7 +348,7 @@ func NewTransCacheWithOfflineCollector(opts *TransCacheOpts, cfg map[string]*Cac
 		}
 		wg.Go(func() {
 			offColl := NewOfflineCollector(cacheName, opts, l)
-			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.Clone, config.OnEvicted, config.Replicate)
+			cache, err := NewCacheFromFolder(offColl, config.MaxItems, config.TTL, config.StaticTTL, config.OnEvicted, config.Replicate)
 			if err != nil {
 				errChan <- err
 				return
